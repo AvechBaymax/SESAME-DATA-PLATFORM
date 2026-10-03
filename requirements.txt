@@ -1,0 +1,23 @@
+# Thư viện Python dùng cho code của project (job Spark, producer/consumer Kafka, đọc ghi MinIO).
+# Cài trên máy host để viết/chạy thử code:  pip install -r requirements.txt
+#
+# Lưu ý: KHÔNG liệt kê apache-airflow ở đây. Airflow chạy trong Docker (xem Dockerfile.airflow);
+# nếu cần cài local để IDE gợi ý code, hãy cài theo constraints chính thức của Airflow.
+ 
+# --- Spark ---
+pyspark==3.5.3          # phải khớp version với Spark cluster trong docker-compose
+ 
+# --- Kafka ---
+kafka-python>=2.0.2
+ 
+# --- MinIO / S3 ---
+boto3>=1.34
+minio>=7.2
+ 
+# --- Xử lý dữ liệu ---
+pandas>=2.0
+pyarrow>=14.0
+ 
+# --- Tiện ích ---
+python-dotenv>=1.0
+ 

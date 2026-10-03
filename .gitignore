@@ -1,0 +1,62 @@
+# ---------- Secrets / môi trường ----------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+ 
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+ 
+# ---------- Airflow ----------
+logs/
+airflow.db
+airflow.cfg
+airflow-webserver.pid
+standalone_admin_password.txt
+webserver_config.py
+plugins/__pycache__/
+ 
+# ---------- Spark ----------
+spark-warehouse/
+metastore_db/
+derby.log
+checkpoint/
+checkpoints/
+*.crc
+.sparkStaged*
+ 
+# ---------- Dữ liệu cục bộ (MinIO, Kafka, dataset...) ----------
+data/
+minio_data/
+kafka_data/
+postgres_data/
+*.parquet
+*.orc
+*.avro
+*.csv
+*.jsonl
+ 
+# ---------- IDE / OS ----------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+ 
+# ---------- Giữ lại thư mục rỗng (tạo file .gitkeep bên trong) ----------
+!dags/.gitkeep
+!jobs/.gitkeep
+!plugins/.gitkeep
+ 
