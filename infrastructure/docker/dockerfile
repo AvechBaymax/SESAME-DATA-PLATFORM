@@ -10,9 +10,9 @@ ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
 USER airflow
 
-RUN pip install --default-timeout=1000 pyspark==3.5.3
-
 RUN pip install --default-timeout=1000 --no-cache-dir \
+    --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.10.txt \
+    pyspark==3.5.4 \
     apache-airflow-providers-apache-spark \
     apache-airflow-providers-amazon \
     kafka-python \
