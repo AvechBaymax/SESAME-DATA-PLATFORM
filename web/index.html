@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f7f2" />
+    <meta
+      name="description"
+      content="A sesame farm monitoring dashboard prototype for weather, soil, and field conditions."
+    />
+    <title>Fieldnote — Sesame farm monitoring</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Main navigation">
+        <a class="brand" href="#" aria-label="Fieldnote home">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="M16 27V14m0 8c-6 0-10-4-10-10 6 0 10 4 10 10Zm0-5c0-6 4-10 10-10 0 6-4 10-10 10Z" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+          <span>fieldnote<span class="brand-period">.</span></span>
+        </a>
+
+        <div class="workspace-label">WORKSPACE</div>
+        <nav class="main-nav">
+          <a class="nav-link active" href="#overview" aria-current="page">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></svg>
+            Overview
+          </a>
+          <a class="nav-link" href="#field">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5v-9Z"/><path d="m3.8 7.7 8.2 4.5 8.2-4.5M12 12.2V21"/></svg>
+            Field map
+          </a>
+          <a class="nav-link" href="#weather">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a4 4 0 1 1 .7-7.9A5.5 5.5 0 0 1 18.5 12a3 3 0 0 1-.5 6H7Z"/><path d="m9 21-1 1m6-1-1 1m6-1-1 1"/></svg>
+            Weather
+          </a>
+          <a class="nav-link" href="#soil">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><path d="M8 5v4m8 1v4m-5 1v4"/></svg>
+            Soil &amp; crop
+          </a>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="data-source">
+            <span class="source-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8m0-12.8L5.6 18.4"/><circle cx="12" cy="12" r="8.5"/></svg>
+            </span>
+            <div>
+              <strong id="source-status">Earth Engine</strong>
+              <span id="source-detail">Waiting for live data</span>
+            </div>
+            <span class="live-dot" aria-label="Demo mode"></span>
+          </div>
+          <div class="profile">
+            <div class="avatar">NT</div>
+            <div class="profile-copy"><strong>Farm manager</strong><span>Sesame grower</span></div>
+            <button class="icon-button profile-menu" aria-label="Profile options" type="button">···</button>
+          </div>
+        </div>
+      </aside>
+
+      <main id="overview" class="main-content">
+        <header class="topbar">
+          <div class="breadcrumbs"><span>Farms</span><span class="crumb-slash">/</span><strong>Cu Chi Farm</strong></div>
+          <div class="topbar-actions">
+            <span class="demo-tag" id="data-badge"><span></span> CONNECTING</span>
+            <button class="icon-button notification-button" type="button" aria-label="Notifications">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9Zm-8 12h4"/></svg>
+              <span class="notification-dot"></span>
+            </button>
+            <div class="top-avatar" aria-label="Farm manager">NT</div>
+          </div>
+        </header>
+
+        <div class="page-wrap">
+          <section class="page-heading">
+            <div>
+              <div class="eyebrow"><span class="status-dot"></span> FARM STATUS <span class="eyebrow-divider">·</span> ACTIVE</div>
+              <h1>Good morning, farmer <span class="wave">✳</span></h1>
+              <p class="page-subtitle">Here’s what’s happening across your sesame fields today.</p>
+            </div>
+            <button id="refresh-button" class="refresh-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 17.3 6L20 12M4 12l2.7 6a7 7 0 0 0 11.7-3"/></svg>
+              <span>Refresh data</span>
+            </button>
+          </section>
+
+          <section class="farm-strip" aria-label="Selected farm">
+            <div class="farm-avatar" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M3 20h18M5 20V9l7-5 7 5v11M9 20v-6h6v6M8 10h.01M16 10h.01"/></svg>
+            </div>
+            <div class="farm-name">
+              <strong>Cu Chi Farm <span class="farm-code">CUCHI_02</span></strong>
+              <span>Cu Chi District, Ho Chi Minh City, Vietnam <span class="coord-separator">·</span> <span id="farm-coordinates">11.00° N, 106.40° E</span></span>
+            </div>
+            <div class="farm-strip-divider"></div>
+            <div class="farm-area">
+              <span class="area-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m3 7 6-4 6 4 6-4v14l-6 4-6-4-6 4V7Z"/><path d="M9 3v14m6-10v14"/></svg>
+              </span>
+              <div><strong>0.50 <small>ha</small></strong><span>MONITORED AREA</span></div>
+            </div>
+            <span class="farm-crop">Sesame <span>·</span> Black sesame</span>
+          </section>
+
+          <section class="section-heading" aria-labelledby="conditions-title">
+            <div><span class="section-kicker">FIELD CONDITIONS</span><h2 id="conditions-title">Right now <span class="muted-date" id="today-label"></span></h2></div>
+            <span class="updated-label"><span class="live-dot"></span> Updated just now</span>
+          </section>
+
+          <section class="metrics-grid" aria-label="Current field measurements">
+            <article class="metric-card temperature-card">
+              <div class="metric-top"><span class="metric-label">AIR TEMPERATURE</span><span class="metric-icon sun-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg></span></div>
+              <div class="metric-value" id="temperature-value">—<span>°C</span></div>
+              <div class="metric-foot"><span class="metric-context" id="temperature-context">Latest ERA5-Land daily mean</span><span class="metric-trend" id="temperature-date">Waiting for data</span></div>
+              <div class="metric-sparkline temperature-spark" id="temperature-spark"></div>
+            </article>
+            <article class="metric-card rain-card">
+              <div class="metric-top"><span class="metric-label">RAINFALL <span class="info-dot" title="Simulated reading">i</span></span><span class="metric-icon rain-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 16a4 4 0 1 1 .7-7.9A5.5 5.5 0 0 1 18.5 10a3 3 0 0 1-.5 6H7Z"/><path d="m9 19-1 2m6-2-1 2m6-2-1 2"/></svg></span></div>
+              <div class="metric-value" id="rainfall-value">—<span>mm</span></div>
+              <div class="metric-foot"><span class="metric-context">Latest ERA5-Land daily total</span><span class="metric-trend" id="rainfall-date">Waiting for data</span></div>
+              <div class="metric-progress"><span id="rainfall-progress" style="width: 0%"></span></div>
+              <div class="progress-labels"><span>0 mm</span><span>Daily total</span></div>
+            </article>
+            <article class="metric-card moisture-card" id="soil">
+              <div class="metric-top"><span class="metric-label">LATEST NDVI <span class="info-dot" title="Satellite vegetation index">i</span></span><span class="metric-icon soil-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21V11m0 6c-5 0-8-3-8-8 5 0 8 3 8 8Zm0-5c0-5 3-8 8-8 0 5-3 8-8 8Z"/></svg></span></div>
+              <div class="metric-value" id="ndvi-value">—<span>/ 1</span></div>
+              <div class="metric-foot"><span class="metric-context">Sentinel-2 vegetation index</span><span class="metric-trend" id="ndvi-date">Waiting for data</span></div>
+              <div class="moisture-scale"><span id="ndvi-marker"></span></div>
+              <div class="scale-labels"><span>Low</span><span>Vegetation signal</span><span>High</span></div>
+            </article>
+            <article class="metric-card humidity-card">
+              <div class="metric-top"><span class="metric-label">RELATIVE HUMIDITY</span><span class="metric-icon humidity-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5S6 10 6 14a6 6 0 0 0 12 0c0-4-6-10.5-6-10.5Z"/></svg></span></div>
+              <div class="metric-value" id="humidity-value">—<span>%</span></div>
+              <div class="metric-foot"><span class="metric-context">Estimated from ERA5-Land</span><span class="metric-trend" id="humidity-date">Waiting for data</span></div>
+              <div class="humidity-bars" id="humidity-bars" aria-hidden="true"></div>
+            </article>
+          </section>
+
+          <section class="content-grid">
+            <article class="panel trend-panel" id="weather">
+              <div class="panel-header">
+                <div><span class="section-kicker">LOCAL WEATHER</span><h2>Weather trends</h2></div>
+                <div class="chart-controls" role="group" aria-label="Chart time range">
+                  <button type="button" class="range-button selected" data-range="7">7 days</button>
+                  <button type="button" class="range-button" data-range="30">30 days</button>
+                </div>
+              </div>
+              <div class="chart-legend"><span><i class="legend-swatch temperature-swatch"></i>Temperature <b>°C</b></span><span><i class="legend-swatch rainfall-swatch"></i>Rainfall <b>mm</b></span></div>
+              <div class="chart-wrap" id="weather-chart" role="img" aria-label="Chart showing temperature and rainfall over the last seven days"></div>
+              <div class="chart-footer"><span id="chart-source"><span class="chart-foot-dot"></span> Loading Earth Engine weather</span><a href="#weather" class="text-link">ERA5-Land <span>↗</span></a></div>
+            </article>
+
+            <article class="panel field-panel" id="field">
+              <div class="panel-header field-header">
+                <div><span class="section-kicker">YOUR LAND</span><h2>Field overview</h2></div>
+                <button class="map-action" id="map-button" type="button" aria-label="Show field coordinates">↗</button>
+              </div>
+              <div class="field-map" aria-label="Illustrative map of the sesame field">
+                <div class="map-grid"></div>
+                <div class="map-water"></div>
+                <div class="map-road road-one"></div>
+                <div class="map-road road-two"></div>
+                <svg class="field-shape" viewBox="0 0 340 174" preserveAspectRatio="none" aria-hidden="true">
+                  <defs><pattern id="cropRows" width="11" height="11" patternTransform="rotate(27)" patternUnits="userSpaceOnUse"><rect width="11" height="11" fill="#dce8ca"/><path d="M0 1h11" stroke="#9ab27b" stroke-width="2"/></pattern></defs>
+                  <path d="M103 31 240 22 263 57 250 133 120 145 83 107Z" fill="url(#cropRows)" stroke="#526e43" stroke-width="2.2" stroke-linejoin="round"/>
+                  <path d="M118 49 229 42M111 69 242 62M104 91 247 83M112 114 243 106M132 132 236 124" stroke="#f7f8ef" stroke-width="2" opacity=".72"/>
+                </svg>
+                <span class="map-label label-north">N</span>
+                <span class="map-pin"><i></i><span>CUCHI_02</span></span>
+                <span class="map-scale"><i></i> 100 m</span>
+                <span class="map-caption">Cu Chi District <span>·</span> Vietnam</span>
+              </div>
+              <div class="field-stats">
+                <div><span>FIELD AREA</span><strong>0.50 ha · configured</strong></div>
+                <div><span>LOCATION</span><strong>11.00° N, 106.40° E</strong></div>
+                <div><span>BOUNDARY</span><strong>Illustrative map</strong></div>
+              </div>
+            </article>
+
+            <article class="panel recommendation-panel">
+              <div class="recommendation-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v18m0-12c-5.5 0-8 3-8 7 5 0 8-2.5 8-7Zm0 2c5.5 0 8 3 8 7-5 0-8-2.5-8-7Z"/></svg></div>
+              <div class="recommendation-copy"><span class="section-kicker">SATELLITE OBSERVATION <span class="insight-pill">SENTINEL-2</span></span><h3 id="satellite-title">Waiting for clear imagery</h3><p id="satellite-detail">NDVI is a satellite vegetation index, not a direct crop-health diagnosis.</p></div>
+              <span class="recommendation-arrow" aria-hidden="true">↗</span>
+            </article>
+            <article class="panel crop-panel">
+              <div class="crop-progress-top"><div><span class="section-kicker">SOIL &amp; TERRAIN · STATIC MAP DATA</span><h3>Field characteristics</h3></div></div>
+              <div class="soil-details">
+                <span>pH <strong id="soil-ph">—</strong></span>
+                <span>Sand <strong id="soil-sand">—</strong> g/kg</span>
+                <span>Clay <strong id="soil-clay">—</strong> g/kg</span>
+                <span>Elevation <strong id="terrain-elevation">—</strong> m</span>
+              </div>
+              <div class="crop-progress-bottom" id="soil-date">SoilGrids · 0–5 cm <span>SRTM elevation model</span></div>
+            </article>
+          </section>
+
+          <footer class="page-footer">
+            <span>Fieldnote <span class="footer-dot">·</span> Sesame farm monitoring</span>
+            <span>Satellite and reanalysis estimates, not on-field sensor measurements.</span>
+          </footer>
+        </div>
+      </main>
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    </div>
+  </body>
+</html>
