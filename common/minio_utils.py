@@ -1,45 +1,91 @@
-"""Shared configuration: load .env once and expose typed settings."""
-import os
-from dataclasses import dataclass
-from pathlib import Path
+"""Shared MinIO (S3) helpers used by every ingestion / mock script."""
+import json
+from datetime import datetime, timezone
  
-from dotenv import load_dotenv
+import boto3
+from botocore.client import Config
+from botocore.exceptions import ClientError
  
-# Load .env from the project root (parent of common/).
-# Variables already exported in the shell take precedence over .env.
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+from .config import MinioSettings, get_minio_settings
  
- 
-def require_env(name: str) -> str:
-    """Return an environment variable or fail loudly (no silent default credentials)."""
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name} (see .env.example)")
-    return value
+_checked_buckets: set = set()  # avoid a head_bucket call on every upload
  
  
-@dataclass(frozen=True)
-class MinioSettings:
-    endpoint: str
-    access_key: str
-    secret_key: str
-    bucket: str
- 
- 
-def get_minio_settings(endpoint=None, access_key=None, secret_key=None, bucket=None) -> MinioSettings:
-    """
-    Build MinIO settings. Explicit arguments (e.g. CLI flags) win over environment variables.
-    Endpoint and credentials are required; the bucket falls back to 'landing-zone'.
-    """
-    return MinioSettings(
-        endpoint=endpoint or require_env("MINIO_ENDPOINT"),
-        access_key=access_key or require_env("MINIO_ACCESS_KEY"),
-        secret_key=secret_key or require_env("MINIO_SECRET_KEY"),
-        bucket=bucket or os.getenv("MINIO_BUCKET", "landing-zone"),
+def get_s3_client(settings: MinioSettings | None = None):
+    """S3 client pointed at MinIO (path-style addressing is required)."""
+    settings = settings or get_minio_settings()
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.endpoint,
+        aws_access_key_id=settings.access_key,
+        aws_secret_access_key=settings.secret_key,
+        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+        region_name="us-east-1",  # MinIO ignores the region but boto3 needs one
     )
  
  
-def get_kafka_broker(broker=None) -> str:
-    """Kafka bootstrap server; defaults to localhost for local dev."""
-    return broker or os.getenv("KAFKA_BROKER", "localhost:9092")
+def ensure_bucket(s3, bucket: str) -> None:
+    """Create the bucket if it does not exist yet (checked once per process)."""
+    if bucket in _checked_buckets:
+        return
+    try:
+        s3.head_bucket(Bucket=bucket)
+    except ClientError:
+        s3.create_bucket(Bucket=bucket)
+        print(f"Created bucket: {bucket}")
+    _checked_buckets.add(bucket)
+ 
+ 
+def upload_json(s3, bucket: str, key: str, payload, indent: int | None = None) -> None:
+    """Upload a JSON-serializable payload as an object."""
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=json.dumps(payload, ensure_ascii=False, indent=indent).encode("utf-8"),
+        ContentType="application/json",
+    )
+ 
+ 
+def utc_now_compact() -> str:
+    """UTC timestamp for file names, e.g. 20261006T081500Z."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+ 
+ 
+def utc_today() -> str:
+    """UTC date for dt= partitions, e.g. 2026-10-06."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+ 
+ 
+def build_key(prefix: str, filename: str, **partitions) -> str:
+    """
+    Build a Hive-style object key. Partition order follows keyword order.
+      build_key("soilgrids", "x.json", dt="2026-10-06", farm_id="CUCHI_02")
+      -> soilgrids/dt=2026-10-06/farm_id=CUCHI_02/x.json
+    """
+    parts = [prefix.strip("/")] + [f"{k}={v}" for k, v in partitions.items()] + [filename]
+    return "/".join(parts)
+ 
+ 
+def upload_raw_json(
+    prefix: str,
+    payload,
+    filename: str | None = None,
+    settings: MinioSettings | None = None,
+    indent: int | None = None,
+    **partitions,
+) -> str:
+    """
+    One-call helper for landing-zone ingestion: build key, ensure bucket, upload.
+    Returns the s3:// URI of the new object.
+ 
+      upload_raw_json("soilgrids", payload, dt=utc_today(), lat=11.0, lon=106.4)
+    """
+    settings = settings or get_minio_settings()
+    filename = filename or f"{utc_now_compact()}.json"
+    key = build_key(prefix, filename, **partitions)
+ 
+    s3 = get_s3_client(settings)
+    ensure_bucket(s3, settings.bucket)
+    upload_json(s3, settings.bucket, key, payload, indent=indent)
+    return f"s3://{settings.bucket}/{key}"
  
