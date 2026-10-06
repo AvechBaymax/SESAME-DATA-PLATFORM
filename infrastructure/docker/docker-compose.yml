@@ -63,7 +63,7 @@ services:
  
   # ---------------- Spark cluster ----------------
   spark-master:
-    image: apache/spark:3.5.3-scala2.12-java17-python3-ubuntu
+    image: apache/spark:3.5.4-scala2.12-java17-python3-ubuntu
     container_name: spark-master
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     environment:
@@ -77,7 +77,7 @@ services:
       - ../../src/jobs:/opt/spark-jobs
  
   spark-worker:
-    image: apache/spark:3.5.3-scala2.12-java17-python3-ubuntu
+    image: apache/spark:3.5.4-scala2.12-java17-python3-ubuntu
     container_name: spark-worker
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
