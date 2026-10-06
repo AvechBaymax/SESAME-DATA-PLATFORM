@@ -1,5 +1,5 @@
 # --- Spark ---
-pyspark==3.5.3
+pyspark==3.5.4
 
 # --- Kafka ---
 kafka-python>=2.0.3
@@ -15,3 +15,6 @@ pyarrow>=14.0
 
 # --- Tiện ích ---
 python-dotenv>=1.0
+
+# --- Google Earth Engine ---
+earthengine-api>=1.5.0,<2.0
