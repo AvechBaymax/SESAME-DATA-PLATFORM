@@ -1,14 +1,18 @@
-"""HTTP GET with retry on network errors, 429 and 5xx (shared by API ingesters)."""
+"""Shared HTTP helper with retry/backoff for the public APIs (ISRIC, NASA POWER, OpenWeatherMap)."""
 import time
 
 import requests
 
 
-def get_json(url, params=None, max_retries=5, timeout=60, session=None, sleep=time.sleep):
-    http = session or requests
+def get_json(url, params=None, headers=None, max_retries=5, timeout=60, sleep=time.sleep):
+    """
+    GET a URL and return parsed JSON.
+    Retries on network errors, 429 (honours Retry-After) and 5xx with exponential backoff.
+    Other 4xx errors are raised immediately because retrying will not fix bad parameters.
+    """
     for attempt in range(1, max_retries + 1):
         try:
-            resp = http.get(url, params=params, timeout=timeout)
+            resp = requests.get(url, params=params, headers=headers, timeout=timeout)
         except (requests.Timeout, requests.ConnectionError) as exc:
             wait = min(2 ** attempt * 5, 120)
             print(f"Network error ({exc}), retry {attempt}/{max_retries} in {wait}s")
@@ -30,7 +34,6 @@ def get_json(url, params=None, max_retries=5, timeout=60, session=None, sleep=ti
             sleep(wait)
             continue
 
-        # Other 4xx: bad parameters or credentials, retrying will not help
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
     raise RuntimeError("Max retries exceeded")

@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 
 from common.et0 import saturation_vapour_pressure, solar_declination
-from common.http import get_json
+from common.http_utils import get_json
 
 # Approximate monthly climatology for Phan Thiet (Jan..Dec); good enough for mocks.
 CLIMATOLOGY = {

@@ -18,10 +18,10 @@ import json
 import sys
 from datetime import datetime, timedelta, timezone
 
-from common.config import add_minio_args
+from common.config import add_minio_args, minio_settings_from_args
 from common.crop import BINH_THUAN_PRACTICE, in_sowing_window, season_length
 from common.farm import add_farm_args, farm_from_args, ring_area_perimeter
-from common.storage import ensure_bucket, landing_key, s3_client_from_args, upload_json
+from common.minio_utils import upload_raw_json, utc_now_compact
 from mock_iot.simulator import SENSOR_DEPTH_CM
 
 
@@ -119,11 +119,9 @@ def main(argv=None):
     if args.dry_run:
         return
 
-    now = datetime.now(timezone.utc)
-    key = landing_key("user_config", f"config_{now:%Y%m%dT%H%M%SZ}.json", farm_id=farm.farm_id)
-    s3 = s3_client_from_args(args)
-    ensure_bucket(s3, args.bucket)
-    print(f"Uploaded {upload_json(s3, args.bucket, key, payload, indent=2)}")
+    uri = upload_raw_json("user_config", payload, filename=f"config_{utc_now_compact()}.json",
+                          settings=minio_settings_from_args(args), indent=2, farm_id=farm.farm_id)
+    print(f"Uploaded {uri}")
 
 
 if __name__ == "__main__":

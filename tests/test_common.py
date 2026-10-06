@@ -6,7 +6,8 @@ from common.crop import crop_coefficient, growth_stage, in_sowing_window, season
 from common.et0 import et0_penman_monteith, extraterrestrial_radiation
 from common.farm import FarmProfile, ring_area_perimeter
 from common.soil import TEXTURES, SoilHydraulics, texture_from_fractions
-from common.storage import landing_key
+from common.config import get_minio_settings, require_env
+from common.minio_utils import build_key
 
 
 def test_extraterrestrial_radiation_matches_fao56_example_8():
@@ -61,6 +62,49 @@ def test_polygon_area_matches_requested_area():
     assert perimeter == pytest.approx(2 * (50 + 100), rel=0.01)
 
 
-def test_landing_key_layout():
-    key = landing_key("weather", "data.json", farm_id="F1", dt=date(2026, 1, 2), src="owm")
-    assert key == "weather/farm_id=F1/dt=2026-01-02/src=owm/data.json"
+def test_build_key_layout():
+    key = build_key("/weather/", "data.json", dt="2026-01-02", farm_id="F1")
+    assert key == "weather/dt=2026-01-02/farm_id=F1/data.json"
+
+
+def test_minio_settings_have_no_default_credentials(monkeypatch):
+    for name in ("MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(RuntimeError, match="MINIO_ENDPOINT"):
+        get_minio_settings()
+    with pytest.raises(RuntimeError, match="MINIO_ACCESS_KEY"):
+        require_env("MINIO_ACCESS_KEY")
+    settings = get_minio_settings("http://m:9000", "a", "b")  # CLI flags win, bucket defaults
+    assert (settings.endpoint, settings.bucket) == ("http://m:9000", "landing-zone")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "env-key")
+    assert get_minio_settings("http://m:9000", secret_key="s").access_key == "env-key"
+
+
+def test_upload_raw_json_builds_key_and_checks_bucket_once(monkeypatch):
+    from botocore.exceptions import ClientError
+
+    from common import minio_utils
+
+    calls = []
+
+    class FakeS3:
+        def head_bucket(self, Bucket):
+            calls.append(("head", Bucket))
+            raise ClientError({"Error": {"Code": "404"}}, "HeadBucket")
+
+        def create_bucket(self, Bucket):
+            calls.append(("create", Bucket))
+
+        def put_object(self, Bucket, Key, Body, ContentType):
+            calls.append(("put", Bucket, Key, Body))
+
+    monkeypatch.setattr(minio_utils, "_checked_buckets", set())
+    monkeypatch.setattr(minio_utils, "get_s3_client", lambda settings: FakeS3())
+    settings = get_minio_settings("http://m:9000", "a", "b", "bkt")
+
+    uri = minio_utils.upload_raw_json("user_config", {"vn": "mè"}, filename="c.json",
+                                      settings=settings, farm_id="F1")
+    minio_utils.upload_raw_json("user_config", {}, filename="d.json", settings=settings)
+    assert uri == "s3://bkt/user_config/farm_id=F1/c.json"
+    assert [c[0] for c in calls] == ["head", "create", "put", "put"]
+    assert "mè".encode() in calls[2][3]  # ensure_ascii=False keeps Vietnamese readable

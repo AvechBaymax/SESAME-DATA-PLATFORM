@@ -29,7 +29,7 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 
-from common.config import get_settings
+from common.config import get_kafka_broker, get_sensor_topic
 from common.farm import add_farm_args, farm_from_args
 from mock_iot.simulator import SensorNode
 from mock_iot.weather import ClimatologyWeather, DiurnalWeather, NasaPowerWeather
@@ -113,7 +113,7 @@ class FileSink:
             self.stream.close()
 
 
-def make_sink(args, settings):
+def make_sink(args):
     if args.sink == "kafka":
         return KafkaSink(args.broker, args.topic)
     if args.sink == "jsonl":
@@ -179,7 +179,6 @@ def run_live(nodes, sink, args, rng):
 
 
 def parse_args(argv=None):
-    settings = get_settings()
     ap = argparse.ArgumentParser(description="Simulated sesame field sensors -> Kafka")
     add_farm_args(ap)
     ap.add_argument("--mode", choices=["live", "backfill"], default="live")
@@ -194,22 +193,24 @@ def parse_args(argv=None):
     ap.add_argument("--seed", default="sesame", help="random seed for reproducible runs")
     ap.add_argument("--sink", choices=["kafka", "stdout", "jsonl"], default="kafka")
     ap.add_argument("--output", help="jsonl sink: output file")
-    ap.add_argument("--broker", default=settings.kafka_broker)
-    ap.add_argument("--topic", default=settings.topic_sensor_raw)
+    ap.add_argument("--broker", default=None, help="default: $KAFKA_BROKER or localhost:9092")
+    ap.add_argument("--topic", default=None, help="default: $KAFKA_TOPIC_SENSOR_RAW or sesame.sensor.raw")
     args = ap.parse_args(argv)
     if args.start is None:
         args.start = args.planting_date - timedelta(days=5)
     if not 0 <= args.fault_rate <= 1:
         ap.error("--fault-rate must be between 0 and 1")
-    return args, settings
+    args.broker = get_kafka_broker(args.broker)
+    args.topic = get_sensor_topic(args.topic)
+    return args
 
 
 def main(argv=None):
-    args, settings = parse_args(argv)
+    args = parse_args(argv)
     farm = farm_from_args(args)
     rng = random.Random(f"{args.seed}:faults")
     nodes = build_nodes(farm, args)
-    sink = make_sink(args, settings)
+    sink = make_sink(args)
     try:
         if args.mode == "backfill":
             run_backfill(nodes, sink, args, rng)

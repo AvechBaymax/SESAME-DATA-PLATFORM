@@ -15,9 +15,9 @@ Object keys:
 import argparse
 from datetime import datetime, timezone
 
-from common.config import add_minio_args
+from common.config import add_minio_args, minio_settings_from_args
 from common.crop import BINH_THUAN_PRACTICE, SESAME_FAO
-from common.storage import ensure_bucket, landing_key, s3_client_from_args, upload_json
+from common.minio_utils import upload_raw_json
 
 
 def main(argv=None):
@@ -27,16 +27,14 @@ def main(argv=None):
 
     now = datetime.now(timezone.utc).isoformat()
     documents = {
-        landing_key("fao_reference", "fao_56_33_params.json", crop="sesame"):
-            {**SESAME_FAO, "updated_at": now},
-        landing_key("agronomy_reference", "binh_thuan_black_2shell.json", crop="sesame"):
+        ("fao_reference", "fao_56_33_params.json"): {**SESAME_FAO, "updated_at": now},
+        ("agronomy_reference", "binh_thuan_black_2shell.json"):
             {**BINH_THUAN_PRACTICE, "updated_at": now},
     }
 
-    s3 = s3_client_from_args(args)
-    ensure_bucket(s3, args.bucket)
-    for key, payload in documents.items():
-        print(f"Uploaded {upload_json(s3, args.bucket, key, payload, indent=2)}")
+    settings = minio_settings_from_args(args)
+    for (prefix, filename), payload in documents.items():
+        print(f"Uploaded {upload_raw_json(prefix, payload, filename=filename, settings=settings, indent=2, crop='sesame')}")
 
 
 if __name__ == "__main__":

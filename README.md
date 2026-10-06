@@ -52,11 +52,13 @@ with the others and with the weather. Useful options:
 - `--devices N`, `--farm-id`, `--lat/--lon`, `--soil-texture` describe the
   plot; use the same values for `user_config_mock` so the data joins.
 
-Shared code lives in `src/common/`: settings (`config`), MinIO helpers and
-landing key layout (`storage`), HTTP retry (`http`), sesame parameters from
-FAO-56 and the Binh Thuan guide (`crop`), soil hydraulics (`soil`), FAO-56
-Penman-Monteith (`et0`) and the farm profile (`farm`). Run the tests with
-`python3 -m pytest`.
+Shared code lives in `src/common/`: `config` (`.env`, MinIO/Kafka settings,
+no default credentials), `minio_utils` (S3 client, `build_key`,
+`upload_raw_json`), `http_utils` (`get_json` with retry), plus sesame
+parameters from FAO-56 and the Binh Thuan guide (`crop`), soil hydraulics
+(`soil`), FAO-56 Penman-Monteith (`et0`) and the farm profile (`farm`).
+MinIO credentials are required: copy `.env.example` to `.env` and fill them
+in. Run the tests with `python3 -m pytest`.
 
 ## Sesame farm monitoring dashboard
 
