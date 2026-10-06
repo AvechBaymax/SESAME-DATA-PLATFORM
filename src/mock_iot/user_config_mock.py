@@ -1,111 +1,130 @@
 #!/usr/bin/env python3
 """
-Generate and upload mock user/farm configuration data to MinIO.
+Generate and upload a mock farm/plot configuration (what a user would enter) to MinIO.
+
+The farm id, location, soil and planting date come from the same profile the
+IoT simulator uses, so config and sensor data join on farm_id/plot_id/device_id.
 
 Usage:
-  python mock_user_config.py
-  python mock_user_config.py --farm-id BINHTHUAN_01 --lat 11.2 --lon 106.5
+  python -m mock_iot.user_config_mock
+  python -m mock_iot.user_config_mock --farm-id BINHTHUAN_02 --lat 11.10 --lon 108.05 \\
+      --planting-date 2026-12-01 --devices 2
 
 Object key layout:
-  user_config/farm_id=<farm_id>/config_<timestamp>.json
+  user_config/farm_id=<farm_id>/config_<UTC timestamp>.json
 """
 import argparse
 import json
-import os
-from datetime import datetime, timezone
-from dotenv import load_dotenv
-import boto3
-from botocore.client import Config
-from botocore.exceptions import ClientError
+import sys
+from datetime import datetime, timedelta, timezone
 
-load_dotenv()
+from common.config import add_minio_args
+from common.crop import BINH_THUAN_PRACTICE, in_sowing_window, season_length
+from common.farm import add_farm_args, farm_from_args, ring_area_perimeter
+from common.storage import ensure_bucket, landing_key, s3_client_from_args, upload_json
+from mock_iot.simulator import SENSOR_DEPTH_CM
 
-def get_s3_client(endpoint, access_key, secret_key):
-    return boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
-        region_name="us-east-1",
-    )
 
-def ensure_bucket(s3, bucket):
-    try:
-        s3.head_bucket(Bucket=bucket)
-    except ClientError:
-        s3.create_bucket(Bucket=bucket)
-        print(f"Created bucket: {bucket}")
-
-def upload_json(s3, bucket, key, payload):
-    s3.put_object(
-        Bucket=bucket,
-        Key=key,
-        Body=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
-
-def generate_mock_config(farm_id, lat, lon, area_m2, perimeter_m):
-    """Tạo payload JSON chứa thông tin cấu hình nông trại."""
+def generate_mock_config(farm, seed_lot=None):
     now = datetime.now(timezone.utc).isoformat()
-    
+    ring = farm.polygon()
+    area_m2, perimeter_m = ring_area_perimeter(ring)
+    sowing = BINH_THUAN_PRACTICE["sowing"]
+    seed_lot = seed_lot or {
+        # Illustrative lot; must meet the guide's standard (G >= 70 %, P >= 99 %).
+        "lot_id": f"LOT-{farm.planting_date:%Y%m}-01",
+        "w1000_g": 3.0,
+        "germination_pct": 85.0,
+        "purity_pct": 99.2,
+        "moisture_pct": 7.5,
+    }
+
+    fertilizer = BINH_THUAN_PRACTICE["fertilizer"]
+    plan = [
+        {
+            "das": event["das"],
+            "planned_date": (farm.planting_date + timedelta(days=event["das"])).isoformat(),
+            "type": event["type"],
+            "products_kg_ha": {name: round(fertilizer["products_kg_ha"][name] * share, 1)
+                               for name, share in event["share"].items()},
+        }
+        for event in fertilizer["schedule"]
+    ]
+
     return {
-        "farm_id": farm_id, # Tạm thời tự định nghĩa, sau này có thể dùng UUID
+        "farm_id": farm.farm_id,
+        "plot_id": farm.plot_id,
         "location": {
-            "latitude": lat,
-            "longitude": lon,
-            "region": "Vietnam"
+            "latitude": farm.lat,
+            "longitude": farm.lon,
+            "province": "Bình Thuận",
+            "country": "VN",
         },
         "geometry": {
-            "area_m2": area_m2,          # Diện tích canh tác
-            "perimeter_m": perimeter_m   # Chu vi lô đất
+            "type": "Polygon",
+            "coordinates": [ring],
+            "area_m2": round(area_m2, 1),
+            "perimeter_m": round(perimeter_m, 1),
+            "note": "Illustrative rectangle around the plot centre",
+        },
+        "soil": {
+            "texture_class": farm.soil_texture,
+            "reference": "isric_soilgrids_v2",
+            "lab_test": None,  # N_soil etc. from a real soil test, when available
         },
         "crop_metadata": {
-            "crop_type": "Mè đen 2 vỏ Bình Thuận",
-            "planting_date": "2026-10-01",  # Ngày xuống giống giả định
-            "soil_type_ref": "isric_soilgrids_v2", # Tham chiếu đến nguồn dữ liệu đất
-            "expected_harvest_days": 75
+            "crop_type": BINH_THUAN_PRACTICE["variety"],
+            "planting_date": farm.planting_date.isoformat(),
+            "season_length_days": season_length(),
+            "expected_harvest_date": (farm.planting_date + timedelta(days=season_length())).isoformat(),
+            "in_recommended_sowing_window": in_sowing_window(farm.planting_date),
         },
+        "management": {
+            "row_spacing_cm": sowing["row_spacing_cm"],
+            "hill_spacing_cm": sowing["hill_spacing_cm"],
+            "plants_per_hill": 1,
+            "seed_rate_kg_ha": sowing["seed_rate_kg_ha"],
+            "irrigation_method": "sprinkler",
+            "fertilizer_plan": plan,
+        },
+        "seed_lot": seed_lot,
+        "devices": [
+            {"device_id": device_id, "device_type": "libelium_smart_agriculture_xtreme",
+             "soil_probe_depth_cm": SENSOR_DEPTH_CM}
+            for device_id in farm.device_ids
+        ],
         "system_metadata": {
             "created_at": now,
             "updated_at": now,
             "status": "active",
-            "note": "Mock config for PoC Data Lakehouse"
-        }
+            "note": "Mock config for PoC Data Lakehouse",
+        },
     }
 
-def main():
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description="Generate and upload mock farm config to MinIO")
-    # Các tham số cấu hình nông trại
-    ap.add_argument("--farm-id", type=str, default="CUCHI_02")
-    ap.add_argument("--lat", type=float, default=11.0)
-    ap.add_argument("--lon", type=float, default=106.4)
-    ap.add_argument("--area", type=float, default=5000.0, help="Area in square meters")
-    ap.add_argument("--perimeter", type=float, default=300.0, help="Perimeter in meters")
-    
-    # Cấu hình MinIO
-    ap.add_argument("--endpoint", default=os.getenv("MINIO_ENDPOINT", "http://localhost:9000"))
-    ap.add_argument("--access-key", default=os.getenv("MINIO_ACCESS_KEY", "admin"))
-    ap.add_argument("--secret-key", default=os.getenv("MINIO_SECRET_KEY", "password123"))
-    ap.add_argument("--bucket", default="landing-zone")
-    args = ap.parse_args()
+    add_farm_args(ap)
+    add_minio_args(ap)
+    ap.add_argument("--dry-run", action="store_true", help="print the payload without uploading")
+    args = ap.parse_args(argv)
 
-    # Tạo payload
-    payload = generate_mock_config(args.farm_id, args.lat, args.lon, args.area, args.perimeter)
+    farm = farm_from_args(args)
+    payload = generate_mock_config(farm)
+    if not payload["crop_metadata"]["in_recommended_sowing_window"]:
+        print(f"Warning: planting date {farm.planting_date} is outside the Binh Thuan sowing "
+              "windows (Nov-Dec, Feb-Mar)", file=sys.stderr)
 
-    # Thiết kế Key: Lưu theo farm_id
-    now = datetime.now(timezone.utc)
-    key = f"user_config/farm_id={args.farm_id}/config_{now:%Y%m%dT%H%M%SZ}.json"
-
-    # Upload lên MinIO
-    s3 = get_s3_client(args.endpoint, args.access_key, args.secret_key)
-    ensure_bucket(s3, args.bucket)
-    upload_json(s3, args.bucket, key, payload)
-
-    print(f"Generated mock config for {args.farm_id}")
-    print(f"Uploaded s3://{args.bucket}/{key}")
-    print("Payload preview:")
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    if args.dry_run:
+        return
+
+    now = datetime.now(timezone.utc)
+    key = landing_key("user_config", f"config_{now:%Y%m%dT%H%M%SZ}.json", farm_id=farm.farm_id)
+    s3 = s3_client_from_args(args)
+    ensure_bucket(s3, args.bucket)
+    print(f"Uploaded {upload_json(s3, args.bucket, key, payload, indent=2)}")
+
 
 if __name__ == "__main__":
     main()
