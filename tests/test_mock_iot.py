@@ -7,7 +7,7 @@ import pytest
 from common.farm import FarmProfile
 from mock_iot.producer import inject_fault, main
 from mock_iot.simulator import SensorNode
-from mock_iot.user_config_mock import generate_mock_config
+from mock_iot.user_config_mock import generate_field_operation_plan, generate_mock_config
 from mock_iot.weather import ClimatologyWeather, DiurnalWeather, NasaPowerWeather, parse_nasa_power
 
 UTC = timezone.utc
@@ -129,19 +129,62 @@ def test_backfill_cli_writes_jsonl(tmp_path):
           "--sink", "jsonl", "--output", str(out)])
     rows = [json.loads(line) for line in out.read_text().splitlines()]
     assert len(rows) == 2 * 96
-    assert {r["device_id"] for r in rows} == {"SN_BINHTHUAN_01_01", "SN_BINHTHUAN_01_02"}
+    assert {r["device_id"] for r in rows} == {"SN_BINHTHUAN_01_P01_01", "SN_BINHTHUAN_01_P01_02"}
+    assert {r["plot_id"] for r in rows} == {"BINHTHUAN_01_P01"}
 
 
-def test_user_config_is_consistent_with_guide():
-    farm = FarmProfile()
+def test_user_config_sections_match_dimensions():
+    farm = FarmProfile(device_count=2)
     cfg = generate_mock_config(farm)
-    assert cfg["crop_metadata"]["in_recommended_sowing_window"]
-    assert cfg["geometry"]["area_m2"] == pytest.approx(farm.area_m2, rel=0.01)
+    assert cfg["farm"]["farm_id"] == "BINHTHUAN_01"
+    assert cfg["plot"]["plot_id"] == "BINHTHUAN_01_P01"
+    assert cfg["plot"]["farm_id"] == cfg["farm"]["farm_id"]
+    assert cfg["plot"]["area_m2"] == pytest.approx(farm.area_m2, rel=0.01)
+    season = cfg["season"]
+    assert season["season_id"] == "BINHTHUAN_01_P01_2026DX"
+    assert season["plot_id"] == cfg["plot"]["plot_id"]
+    assert season["in_recommended_sowing_window"]
+    assert [d["device_id"] for d in cfg["devices"]] == ["SN_BINHTHUAN_01_P01_01", "SN_BINHTHUAN_01_P01_02"]
+    assert all(d["plot_id"] == cfg["plot"]["plot_id"] for d in cfg["devices"])
+
+
+def test_season_ids_follow_sowing_windows():
+    assert FarmProfile(planting_date=date(2027, 2, 10)).season_id == "BINHTHUAN_01_P01_2027XH"
+    assert FarmProfile(planting_date=date(2026, 5, 1)).season_id == "BINHTHUAN_01_P01_2026KH"
+    assert FarmProfile(farm_id="F2", plot_id="F2_P03").device_ids == ["SN_F2_P03_01"]
+
+
+def test_field_operation_plan_matches_guide():
+    farm = FarmProfile()
+    ops = generate_field_operation_plan(farm)
+    ids = [op["operation_id"] for op in ops]
+    assert len(ids) == len(set(ids))
+    assert all(op["status"] == "planned" and op["season_id"] == farm.season_id for op in ops)
+    by_type = {}
+    for op in ops:
+        by_type.setdefault(op["op_type"], []).append(op["das"])
+    assert by_type == {"sowing": [0], "fertilizer": [0, 15, 25], "weed_control": [15, 25], "harvest": [75]}
     totals = {}
-    for event in cfg["management"]["fertilizer_plan"]:
-        for product, kg in event["products_kg_ha"].items():
+    for op in ops:
+        for product, kg in op["details"].get("products_kg_ha", {}).items():
             totals[product] = totals.get(product, 0) + kg
     assert totals["urea"] == pytest.approx(260, abs=0.5)
     assert totals["kcl"] == pytest.approx(100, abs=0.5)
     assert totals["super_lan"] == 375
-    assert cfg["devices"][0]["device_id"] == farm.device_ids[0]
+    assert ops[0]["planned_date"] == farm.planting_date.isoformat()
+    topdress = next(op for op in ops if op["operation_id"].endswith("_fertilizer_015"))
+    assert topdress["planned_date"] == "2026-11-30"
+
+
+def test_user_config_main_uploads_config_and_plan(monkeypatch):
+    from mock_iot import user_config_mock
+
+    for k, v in {"MINIO_ENDPOINT": "http://m:9000", "MINIO_ACCESS_KEY": "a", "MINIO_SECRET_KEY": "b"}.items():
+        monkeypatch.setenv(k, v)
+    uploads = []
+    monkeypatch.setattr(user_config_mock, "upload_raw_json",
+                        lambda prefix, payload, filename=None, settings=None, indent=None, **parts:
+                        uploads.append((prefix, filename, parts)) or "s3://x")
+    user_config_mock.main([])
+    assert [u[0] for u in uploads] == ["user_config", "field_operation"]
+    assert uploads[1][2] == {"farm_id": "BINHTHUAN_01", "season_id": "BINHTHUAN_01_P01_2026DX"}

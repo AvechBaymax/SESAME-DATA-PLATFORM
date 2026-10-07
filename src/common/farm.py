@@ -12,17 +12,40 @@ DEFAULT_LON = 108.12
 DEFAULT_PLANTING_DATE = date(2026, 11, 15)  # Dong Xuan sowing window (Nov-Dec)
 
 
+# Season codes: Dong Xuan (sown Nov-Dec), Xuan He (sown Feb-Mar), KH = outside both windows.
+SEASON_CODES = {11: "DX", 12: "DX", 2: "XH", 3: "XH"}
+
+
 @dataclass
 class FarmProfile:
+    """IDs nest farm -> plot -> season/device, e.g.
+    BINHTHUAN_01 -> BINHTHUAN_01_P01 -> BINHTHUAN_01_P01_2026DX / SN_BINHTHUAN_01_P01_01.
+    """
+
     farm_id: str = DEFAULT_FARM_ID
-    plot_id: str = "P01"
+    plot_id: str = ""  # default: <farm_id>_P01
     lat: float = DEFAULT_LAT
     lon: float = DEFAULT_LON
     area_m2: float = 5000.0
     soil_texture: str = "loamy_sand"
     drainage: str = "good"  # "poor": compacted/low-lying plot that ponds after heavy rain
     planting_date: date = DEFAULT_PLANTING_DATE
-    device_ids: list = field(default_factory=lambda: [f"SN_{DEFAULT_FARM_ID}_01"])
+    device_count: int = 1
+    device_ids: list = field(default_factory=list)  # default: SN_<plot_id>_01..NN
+
+    def __post_init__(self):
+        if not self.plot_id:
+            self.plot_id = f"{self.farm_id}_P01"
+        if not self.device_ids:
+            self.device_ids = [f"SN_{self.plot_id}_{i:02d}" for i in range(1, self.device_count + 1)]
+
+    @property
+    def season_type(self):
+        return SEASON_CODES.get(self.planting_date.month, "KH")
+
+    @property
+    def season_id(self):
+        return f"{self.plot_id}_{self.planting_date:%Y}{self.season_type}"
 
     def das(self, day):
         """Days after sowing (negative before sowing)."""
@@ -58,7 +81,7 @@ def ring_area_perimeter(ring):
 
 def add_farm_args(parser):
     parser.add_argument("--farm-id", default=DEFAULT_FARM_ID)
-    parser.add_argument("--plot-id", default="P01")
+    parser.add_argument("--plot-id", default=None, help="default: <farm-id>_P01")
     parser.add_argument("--lat", type=float, default=DEFAULT_LAT)
     parser.add_argument("--lon", type=float, default=DEFAULT_LON)
     parser.add_argument("--area", type=float, default=5000.0, help="Plot area in m2")
@@ -73,12 +96,12 @@ def add_farm_args(parser):
 def farm_from_args(args):
     return FarmProfile(
         farm_id=args.farm_id,
-        plot_id=args.plot_id,
+        plot_id=args.plot_id or "",
         lat=args.lat,
         lon=args.lon,
         area_m2=args.area,
         soil_texture=args.soil_texture,
         drainage=args.drainage,
         planting_date=args.planting_date,
-        device_ids=[f"SN_{args.farm_id}_{i:02d}" for i in range(1, args.devices + 1)],
+        device_count=args.devices,
     )

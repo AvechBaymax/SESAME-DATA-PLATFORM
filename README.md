@@ -26,7 +26,7 @@ first), then run the modules with `python -m`:
 ```bash
 python3 -m pip install -r requirements.txt -e ".[dev]"
 
-# Farm/plot config and sesame reference data -> MinIO landing zone
+# Farm/plot/season/device config, planned field operations and reference data -> MinIO
 python3 -m mock_iot.user_config_mock
 python3 -m mock_iot.mock_fao_db
 
@@ -60,6 +60,13 @@ python3 -m mock_iot.nasa_ingest
 python3 -m mock_iot.owm_ingest
 python3 -m mock_iot.isric_ingest
 ```
+
+IDs nest farm -> plot -> season/device: `BINHTHUAN_01` -> `BINHTHUAN_01_P01`
+-> `BINHTHUAN_01_P01_2026DX` (DX = Dong Xuan, XH = Xuan He, KH = other) and
+`SN_BINHTHUAN_01_P01_01`. The config's `farm`, `plot`, `season` and `devices`
+sections map to the Silver dimensions; the plan file lands under
+`field_operation/farm_id=.../season_id=.../` with one `planned` row per sowing,
+fertilizer, weed-control and harvest operation.
 
 Shared code lives in `src/common/`: `config` (`.env`, MinIO/Kafka settings,
 no default credentials), `minio_utils` (S3 client, `build_key`,
