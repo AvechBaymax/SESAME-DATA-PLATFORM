@@ -2,20 +2,108 @@
 
 ## Start the local services
 
-Run Docker Compose with the repository's Compose file:
+1. Copy `.env.example` to `.env` and fill in `MINIO_ACCESS_KEY` and
+   `MINIO_SECRET_KEY` (MinIO wants a secret of at least 8 characters). On
+   Linux/WSL set `AIRFLOW_UID` to the number `id -u` prints, so Airflow can
+   write its logs.
+2. From the repository root, create the mounted folders once and start the
+   stack. `--env-file .env` matters: Compose otherwise looks for `.env` next to
+   the Compose file.
 
 ```bash
-docker compose -f infrastructure/docker/docker-compose.yml up -d
+mkdir -p logs plugins
+docker compose --env-file .env -f infrastructure/docker/docker-compose.yml up -d --build
 ```
 
-To run the command from the Compose directory instead:
+One Dockerfile (`infrastructure/docker/dockerfile`) builds two images that
+share the same extra Spark jars in `/opt/spark/extra-jars`:
+
+- `sesame-spark` (target `spark`): Spark master and worker.
+- `sesame-airflow` (target `airflow`): Airflow plus the PySpark driver.
+
+The jars are Delta Lake 3.3.0, `hadoop-aws` 3.3.4 with the AWS SDK bundle
+(S3A for MinIO) and the Spark Kafka source, all matching Spark 3.5.4.
+`infrastructure/spark/spark-defaults.conf` enables Delta, points S3A at
+`http://minio:9000` and reads the credentials from `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY`, which Compose fills from the MinIO keys.
+
+On start-up `airflow-init` creates the buckets `landing-zone` (raw files) and
+`lakehouse` (Delta tables), and `kafka-init` creates the topics
+`sesame.sensor.raw` and `sesame.sensor.raw.dlq`.
+
+Check that Spark can write Delta tables to MinIO:
 
 ```bash
-cd infrastructure/docker
-docker compose up -d
+docker exec spark-master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 /opt/spark-jobs/smoke_delta.py
+# -> Delta on MinIO OK: 5 rows at s3a://lakehouse/_smoke/delta_check, ...
 ```
 
-The Airflow image is built from `infrastructure/docker/dockerfile`.
+| Service | URL |
+| --- | --- |
+| Airflow | http://localhost:8080 (admin / admin) |
+| Spark master | http://localhost:8081 |
+| MinIO console | http://localhost:9001 |
+| Kafka (from the host) | localhost:9092 |
+
+## Mock data for the PoC
+
+Until the growing season starts, sensor and farm data are simulated. Install
+the project once from the repository root (copy `.env.example` to `.env`
+first), then run the modules with `python -m`:
+
+```bash
+python3 -m pip install -r requirements.txt -e ".[dev]"
+
+# Farm/plot/season/device config, planned field operations and reference data -> MinIO
+python3 -m mock_iot.user_config_mock
+python3 -m mock_iot.mock_fao_db
+
+# Live sensor stream -> Kafka topic sesame.sensor.raw
+python3 -m mock_iot.producer --mode live --interval 5
+
+# A whole simulated season, written to a file instead of Kafka
+python3 -m mock_iot.producer --mode backfill --planting-date 2025-11-15 \
+    --start 2025-11-10 --days 85 --sink jsonl --output data/sensor_season.jsonl
+```
+
+The simulator runs a soil water balance (FAO-56 ET0 x Kc by days after
+sowing, rain, sprinkler irrigation, drainage), so every reading is consistent
+with the others and with the weather. Useful options:
+
+- `--weather nasa` drives a backfill with NASA POWER daily data for the same
+  point (falls back to a Binh Thuan climatology where NASA has no data).
+- `--drainage poor` makes the plot pond after heavy rain (waterlogging
+  scenario: VWC up, soil O2 down).
+- `--fault-rate 0.02` injects malformed, out-of-range, missing-field,
+  duplicate and late messages for DLQ and data-quality tests. The fault type
+  is sent as the Kafka header `x-mock-fault`.
+- `--devices N`, `--farm-id`, `--lat/--lon`, `--soil-texture` describe the
+  plot; use the same values for `user_config_mock` so the data joins.
+
+API ingesters (need `.env`; `OWM_API_KEY` for OpenWeatherMap) land raw JSON in
+MinIO, defaulting to the same farm and location as the mocks:
+
+```bash
+python3 -m mock_iot.nasa_ingest
+python3 -m mock_iot.owm_ingest
+python3 -m mock_iot.isric_ingest
+```
+
+IDs nest farm -> plot -> season/device: `BINHTHUAN_01` -> `BINHTHUAN_01_P01`
+-> `BINHTHUAN_01_P01_2026DX` (DX = Dong Xuan, XH = Xuan He, KH = other) and
+`SN_BINHTHUAN_01_P01_01`. The config's `farm`, `plot`, `season` and `devices`
+sections map to the Silver dimensions; the plan file lands under
+`field_operation/farm_id=.../season_id=.../` with one `planned` row per sowing,
+fertilizer, weed-control and harvest operation.
+
+Shared code lives in `src/common/`: `config` (`.env`, MinIO/Kafka settings,
+no default credentials), `minio_utils` (S3 client, `build_key`,
+`upload_raw_json`), `http_utils` (`get_json` with retry), plus sesame
+parameters from FAO-56 and the Binh Thuan guide (`crop`), soil hydraulics
+(`soil`), FAO-56 Penman-Monteith (`et0`) and the farm profile (`farm`).
+MinIO credentials are required: copy `.env.example` to `.env` and fill them
+in. Run the tests with `python3 -m pytest`.
 
 ## Sesame farm monitoring dashboard
 
