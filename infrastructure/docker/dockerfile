@@ -1,4 +1,33 @@
-FROM apache/airflow:2.10.5-python3.10
+# syntax=docker/dockerfile:1
+# Two images share one set of Spark jars:
+#   target "spark"   -> Spark master/worker (executors)
+#   target "airflow" -> Airflow + PySpark driver (client mode)
+# Versions must match Spark 3.5.4 / Scala 2.12 / Hadoop 3.3.4.
+
+ARG MAVEN=https://repo1.maven.org/maven2
+
+# ---------------------------------------------------------------- jars
+FROM alpine:3.20 AS jars
+ARG MAVEN
+# Delta Lake 3.3.0 (Spark 3.5.x)
+ADD --chmod=644 ${MAVEN}/io/delta/delta-spark_2.12/3.3.0/delta-spark_2.12-3.3.0.jar /jars/
+ADD --chmod=644 ${MAVEN}/io/delta/delta-storage/3.3.0/delta-storage-3.3.0.jar /jars/
+# S3A for MinIO / Ceph (Hadoop 3.3.4, the version Spark 3.5 is built with)
+ADD --chmod=644 ${MAVEN}/org/apache/hadoop/hadoop-aws/3.3.4/hadoop-aws-3.3.4.jar /jars/
+ADD --chmod=644 ${MAVEN}/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar /jars/
+# Kafka source for Structured Streaming
+ADD --chmod=644 ${MAVEN}/org/apache/spark/spark-sql-kafka-0-10_2.12/3.5.4/spark-sql-kafka-0-10_2.12-3.5.4.jar /jars/
+ADD --chmod=644 ${MAVEN}/org/apache/spark/spark-token-provider-kafka-0-10_2.12/3.5.4/spark-token-provider-kafka-0-10_2.12-3.5.4.jar /jars/
+ADD --chmod=644 ${MAVEN}/org/apache/kafka/kafka-clients/3.4.1/kafka-clients-3.4.1.jar /jars/
+ADD --chmod=644 ${MAVEN}/org/apache/commons/commons-pool2/2.11.1/commons-pool2-2.11.1.jar /jars/
+
+# ---------------------------------------------------------------- spark
+FROM apache/spark:3.5.4-scala2.12-java17-python3-ubuntu AS spark
+COPY --from=jars /jars/ /opt/spark/extra-jars/
+COPY infrastructure/spark/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
+
+# ---------------------------------------------------------------- airflow
+FROM apache/airflow:2.10.5-python3.10 AS airflow
 
 USER root
 RUN apt-get update \
@@ -6,14 +35,22 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
+    SPARK_CONF_DIR=/opt/spark/conf \
+    PYTHONPATH=/opt/airflow/src
+
+COPY --from=jars /jars/ /opt/spark/extra-jars/
+COPY infrastructure/spark/spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
 USER airflow
 
 RUN pip install --default-timeout=1000 --no-cache-dir \
     --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.10.txt \
     pyspark==3.5.4 \
+    delta-spark==3.3.0 \
     apache-airflow-providers-apache-spark \
     apache-airflow-providers-amazon \
     kafka-python \
-    boto3
+    boto3 \
+    requests \
+    python-dotenv

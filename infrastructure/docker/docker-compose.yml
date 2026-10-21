@@ -1,86 +1,137 @@
+# Run from the repository root so the root .env is used for ${...} values:
+#   docker compose --env-file .env -f infrastructure/docker/docker-compose.yml up -d --build
+
+x-minio-credentials: &minio-credentials
+  # S3A in Spark reads the AWS_* names; the Python code reads MINIO_*.
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
+  AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY}
+  AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY}
+
+x-spark-common: &spark-common
+  build:
+    context: ../..
+    dockerfile: infrastructure/docker/dockerfile
+    target: spark
+  image: sesame-spark:3.5.4
+  environment: &spark-env
+    <<: *minio-credentials
+    PYTHONPATH: /opt/sesame/src
+  volumes:
+    - ../../src/jobs:/opt/spark-jobs
+    - ../../src:/opt/sesame/src:ro
+
 x-airflow-common: &airflow-common
   build:
     context: ../..
     dockerfile: infrastructure/docker/dockerfile
-  image: custom-airflow-spark:2.10.5
+    target: airflow
+  image: sesame-airflow:2.10.5
   user: "${AIRFLOW_UID:-50000}:0"
   environment: &airflow-env
+    <<: *minio-credentials
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__FERNET_KEY: ""
     AIRFLOW__WEBSERVER__SECRET_KEY: "change-me-secret-key"
-    # Connection tới Spark cluster (dùng trong SparkSubmitOperator, conn_id=spark_default)
+    # Connection to the Spark cluster (SparkSubmitOperator, conn_id=spark_default)
     AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
-    # Connection tới MinIO (S3 compatible)
-    AIRFLOW_CONN_MINIO_DEFAULT: "aws://admin:password123@/?endpoint_url=http%3A%2F%2Fminio%3A9000"
+    # Settings for src/common and the ingest scripts, as seen from inside Docker
+    MINIO_ENDPOINT: http://minio:9000
+    MINIO_BUCKET: landing-zone
+    LAKEHOUSE_BUCKET: lakehouse
+    KAFKA_BROKER: kafka:29092
+    OWM_API_KEY: ${OWM_API_KEY:-}
   volumes:
     - ../../dags:/opt/airflow/dags
     - ../../logs:/opt/airflow/logs
     - ../../plugins:/opt/airflow/plugins
+    - ../../src:/opt/airflow/src
     - ../../src/jobs:/opt/spark-jobs
   depends_on:
     postgres:
       condition: service_healthy
- 
+
 services:
+  # ---------------- Object storage ----------------
   minio:
     image: cgr.dev/chainguard/minio:latest
     container_name: minio
     user: root
     ports:
-      - "9000:9000"   # API Port
-      - "9001:9001"   # Console UI Port
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Console UI
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
- 
+
+  # ---------------- Kafka ----------------
   kafka:
     image: apache/kafka:3.8.1
     container_name: kafka
     ports:
-      - "9092:9092"   # Cho client bên ngoài (máy host)
+      - "9092:9092"   # clients on the host
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,INTERNAL://:29092
-      # localhost:9092 cho máy host, kafka:29092 cho các container khác (Spark, Airflow)
+      # localhost:9092 for the host, kafka:29092 for other containers (Spark, Airflow)
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-      # Single-node: các topic nội bộ chỉ cần 1 replica
+      # Single node: internal topics need only 1 replica
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     volumes:
       - kafka_data:/var/lib/kafka/data
- 
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server kafka:29092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  # Creates the sensor topics (names from the architecture: sesame.sensor.raw + DLQ)
+  kafka-init:
+    image: apache/kafka:3.8.1
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic sesame.sensor.raw --partitions 3 --replication-factor 1
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic sesame.sensor.raw.dlq --partitions 1 --replication-factor 1
+    restart: "no"
+
   # ---------------- Spark cluster ----------------
   spark-master:
-    image: apache/spark:3.5.4-scala2.12-java17-python3-ubuntu
+    <<: *spark-common
     container_name: spark-master
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
     environment:
+      <<: *spark-env
       SPARK_MASTER_HOST: spark-master
       SPARK_MASTER_PORT: "7077"
       SPARK_MASTER_WEBUI_PORT: "8080"
     ports:
       - "8081:8080"   # Spark Master UI
       - "7077:7077"   # Spark master
-    volumes:
-      - ../../src/jobs:/opt/spark-jobs
- 
+
   spark-worker:
-    image: apache/spark:3.5.4-scala2.12-java17-python3-ubuntu
+    <<: *spark-common
     container_name: spark-worker
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
     environment:
+      <<: *spark-env
       SPARK_WORKER_CORES: "2"
       SPARK_WORKER_MEMORY: "2g"
       SPARK_WORKER_WEBUI_PORT: "8081"
@@ -88,9 +139,7 @@ services:
       - "8082:8081"   # Spark Worker UI
     depends_on:
       - spark-master
-    volumes:
-      - ../../src/jobs:/opt/spark-jobs
- 
+
   # ---------------- Airflow ----------------
   postgres:
     image: postgres:15
@@ -105,7 +154,7 @@ services:
       test: ["CMD", "pg_isready", "-U", "airflow", "-d", "airflow"]
       interval: 5s
       retries: 10
- 
+
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
@@ -113,13 +162,19 @@ services:
     command:
       - -c
       - |
+        python -m common.init_buckets &&
         airflow db migrate &&
         airflow users create \
           --username admin --password admin \
           --firstname Admin --lastname User \
           --role Admin --email admin@example.com
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
     restart: "no"
- 
+
   airflow-webserver:
     <<: *airflow-common
     container_name: airflow-webserver
@@ -130,21 +185,21 @@ services:
       airflow-init:
         condition: service_completed_successfully
     restart: always
- 
+
   airflow-scheduler:
     <<: *airflow-common
     container_name: airflow-scheduler
     command: scheduler
     environment:
       <<: *airflow-env
+      # Spark executors connect back to the driver running in this container
       SPARK_LOCAL_HOSTNAME: airflow-scheduler
     depends_on:
       airflow-init:
         condition: service_completed_successfully
     restart: always
- 
+
 volumes:
   minio_data:
   kafka_data:
   postgres_data:
- 
