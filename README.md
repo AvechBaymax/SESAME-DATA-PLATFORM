@@ -2,20 +2,156 @@
 
 ## Start the local services
 
-Run Docker Compose with the repository's Compose file:
+1. Copy `.env.example` to `.env` and fill in `MINIO_ACCESS_KEY` and
+   `MINIO_SECRET_KEY`: the credentials of the S3-compatible object storage
+   (RustFS; the variable names are kept from the earlier MinIO setup). Use a
+   secret of at least 8 characters. On Linux/WSL set `AIRFLOW_UID` to the
+   number `id -u` prints, so Airflow can write its logs.
+2. From the repository root, create the mounted folders once and start the
+   stack. `--env-file .env` matters: Compose otherwise looks for `.env` next to
+   the Compose file.
 
 ```bash
-docker compose -f infrastructure/docker/docker-compose.yml up -d
+mkdir -p logs plugins
+docker compose --env-file .env -f infrastructure/docker/docker-compose.yml up -d --build
 ```
 
-To run the command from the Compose directory instead:
+The stack: RustFS (object storage), Postgres (Airflow metadata and the Iceberg
+catalog), Kafka, a Spark master and worker, and Airflow.
+
+One Dockerfile (`infrastructure/docker/dockerfile`) builds two images that
+share the same extra Spark jars in `/opt/spark/extra-jars`:
+
+- `sesame-spark` (target `spark`): Spark master and worker.
+- `sesame-airflow` (target `airflow`): Airflow plus the PySpark driver.
+
+The jars are Apache Iceberg 1.12.0 (Spark 3.5 runtime), the PostgreSQL JDBC
+driver, `hadoop-aws` 3.3.4 with the AWS SDK bundle (S3A) and the Spark Kafka
+source for Structured Streaming, all matching Spark 3.5.4.
+
+`infrastructure/spark/spark-defaults.conf` makes `lakehouse` the default
+Spark catalog: an Iceberg **JDBC catalog** stored in the Postgres database
+`iceberg_catalog`, with table files under `s3a://lakehouse/warehouse`. S3A
+points at `http://rustfs:9000` and reads the credentials from
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, which Compose fills from the
+keys above. A table is addressed as `lakehouse.<layer>.<table>`, for example
+`lakehouse.silver.fact_weather_daily`.
+
+On start-up:
+
+- Postgres creates the `iceberg_catalog` database on a fresh volume, and
+  `airflow-init` creates it on an existing one (`python -m common.init_catalog`).
+- `airflow-init` creates the buckets `landing-zone` (raw files) and
+  `lakehouse` (Iceberg tables) (`python -m common.init_buckets`).
+- `kafka-init` creates the topics `sesame.sensor.raw` and
+  `sesame.sensor.raw.dlq`.
+
+Check that Spark can create and update Iceberg tables on RustFS:
 
 ```bash
-cd infrastructure/docker
-docker compose up -d
+docker exec spark-master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 /opt/spark-jobs/smoke_iceberg.py
+# -> Iceberg OK: 3 rows, 2 day partitions, 2 snapshots at s3a://lakehouse/warehouse/smoke/sensor_check
 ```
 
-The Airflow image is built from `infrastructure/docker/dockerfile`.
+| Service | URL |
+| --- | --- |
+| Airflow | http://localhost:8080 (admin / admin) |
+| Spark master | http://localhost:8081 |
+| RustFS console | http://localhost:9001 |
+| Kafka (from the host) | localhost:9092 |
+
+The Postgres user and password (`airflow` / `airflow`) and the Airflow admin
+login are local development defaults; production uses separate secrets.
+
+## Mock data for the PoC
+
+Until the growing season starts, sensor and farm data are simulated. Install
+the project once from the repository root (copy `.env.example` to `.env`
+first), then run the modules with `python -m`:
+
+```bash
+python3 -m pip install -r requirements.txt -e ".[dev]"
+
+# Farm/plot/season/device config, planned field operations and reference data -> object storage (landing-zone)
+python3 -m mock_iot.user_config_mock
+python3 -m mock_iot.mock_fao_db
+
+# Live sensor stream -> Kafka topic sesame.sensor.raw
+python3 -m mock_iot.producer --mode live --interval 5
+
+# A whole simulated season, written to a file instead of Kafka
+python3 -m mock_iot.producer --mode backfill --planting-date 2025-11-15 \
+    --start 2025-11-10 --days 85 --sink jsonl --output data/sensor_season.jsonl
+```
+
+The simulator runs a soil water balance (FAO-56 ET0 x Kc by days after
+sowing, rain, sprinkler irrigation, drainage), so every reading is consistent
+with the others and with the weather. Useful options:
+
+- `--weather nasa` drives a backfill with NASA POWER daily data for the same
+  point (falls back to a Binh Thuan climatology where NASA has no data).
+- `--drainage poor` makes the plot pond after heavy rain (waterlogging
+  scenario: VWC up, soil O2 down).
+- `--fault-rate 0.02` injects malformed, out-of-range, missing-field,
+  duplicate and late messages for DLQ and data-quality tests. The fault type
+  is sent as the Kafka header `x-mock-fault`.
+- `--devices N`, `--farm-id`, `--lat/--lon`, `--soil-texture` describe the
+  plot; use the same values for `user_config_mock` so the data joins.
+
+API ingesters (need `.env`; `OWM_API_KEY` for OpenWeatherMap) land raw JSON in
+object storage, defaulting to the same farm and location as the mocks:
+
+```bash
+python3 -m mock_iot.nasa_ingest
+python3 -m mock_iot.owm_ingest
+python3 -m mock_iot.isric_ingest
+```
+
+IDs nest farm -> plot -> season/device: `BINHTHUAN_01` -> `BINHTHUAN_01_P01`
+-> `BINHTHUAN_01_P01_2026DX` (DX = Dong Xuan, XH = Xuan He, KH = other) and
+`SN_BINHTHUAN_01_P01_01`. The config's `farm`, `plot`, `season` and `devices`
+sections map to the Silver dimensions; the plan file lands under
+`field_operation/farm_id=.../season_id=.../` with one `planned` row per sowing,
+fertilizer, weed-control and harvest operation.
+
+Shared code lives in `src/common/`: `config` (`.env`, object storage/Kafka settings,
+no default credentials), `minio_utils` (S3 client for RustFS, `build_key`,
+`upload_raw_json`), `http_utils` (`get_json` with retry), plus sesame
+parameters from FAO-56 and the Binh Thuan guide (`crop`), soil hydraulics
+(`soil`), FAO-56 Penman-Monteith (`et0`) and the farm profile (`farm`).
+Object storage credentials are required: copy `.env.example` to `.env` and fill them
+in. Run the tests with `python3 -m pytest`.
+
+## Run the pipeline (PoC)
+
+Spark jobs live in `src/jobs/`, shared Spark code in `src/lakehouse/`, and the
+Airflow DAGs in `dags/`.
+
+| DAG | Schedule | What it does |
+| --- | --- | --- |
+| `sesame_poc_bootstrap` | manual | Uploads the farm/season config (sown 15/11/2025 by default), reference data, SoilGrids and the NASA POWER weather for the season, then loads them into Bronze |
+| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | NASA POWER (window D-14 to D-7) and OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze |
+
+Trigger the bootstrap from the Airflow UI, or run the same steps by hand:
+
+```bash
+python -m mock_iot.user_config_mock --planting-date 2025-11-15
+python -m mock_iot.mock_fao_db
+python -m mock_iot.isric_ingest
+python -m mock_iot.nasa_ingest --start 20251101 --end 20260215
+docker exec spark-master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 /opt/spark-jobs/landing_to_bronze.py --source all
+```
+
+`landing_to_bronze.py` loads only files it has not loaded before, so it can be
+re-run safely. When NASA POWER or SoilGrids cannot be reached, write payloads
+with the same structure (marked `"mock": true`) instead:
+
+```bash
+python -m mock_iot.mock_api_responses nasa --start 20251101 --end 20260215
+python -m mock_iot.mock_api_responses soilgrids
+```
 
 ## Sesame farm monitoring dashboard
 
