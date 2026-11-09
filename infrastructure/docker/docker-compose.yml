@@ -165,8 +165,10 @@ services:
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
-    entrypoint: /bin/bash
+    # Keep the image's own entrypoint: it registers the arbitrary AIRFLOW_UID as a
+    # named user, without which the Airflow CLI refuses to run.
     command:
+      - bash
       - -c
       - |
         python -m common.init_buckets &&
