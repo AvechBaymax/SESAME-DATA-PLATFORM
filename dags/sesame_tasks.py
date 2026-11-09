@@ -7,6 +7,10 @@ from airflow.operators.bash import BashOperator
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
 SPARK_JOBS = "/opt/spark-jobs"
+# Created by airflow-init with 1 slot: Spark jobs run one at a time. Concurrent
+# jobs fight over the worker's cores and race on the Iceberg JDBC catalog
+# (creating its tables or the same namespace at once).
+SPARK_POOL = "spark"
 
 
 def python_module(task_id, module, args=""):
@@ -22,4 +26,6 @@ def bronze(source):
         application=f"{SPARK_JOBS}/landing_to_bronze.py",
         application_args=["--source", source],
         name=f"bronze-{source}",
+        pool=SPARK_POOL,
+        retries=1,
     )

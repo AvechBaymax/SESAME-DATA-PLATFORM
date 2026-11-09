@@ -37,7 +37,10 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: ""
     AIRFLOW__WEBSERVER__SECRET_KEY: "change-me-secret-key"
     # Connection to the Spark cluster (SparkSubmitOperator, conn_id=spark_default)
-    AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
+    # JSON form: the host must carry the spark:// scheme. In URI form
+    # ("spark://spark-master:7077") Airflow reads spark:// as the connection
+    # type and spark-submit gets the invalid master "spark-master:7077".
+    AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark://spark-master", "port": 7077}'
     # Settings for src/common and the ingest scripts, as seen from inside Docker
     MINIO_ENDPOINT: http://rustfs:9000
     MINIO_BUCKET: landing-zone
@@ -174,6 +177,7 @@ services:
         python -m common.init_buckets &&
         python -m common.init_catalog &&
         airflow db migrate &&
+        airflow pools set spark 1 "Spark jobs run one at a time on the single worker" &&
         airflow users create \
           --username admin --password admin \
           --firstname Admin --lastname User \
