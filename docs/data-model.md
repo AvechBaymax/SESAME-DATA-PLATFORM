@@ -1,7 +1,9 @@
 # Sesame Data Platform: Data Model
 
-Status: proposal, October 2026. The landing layer exists (mock and API
+Status: proposal, November 2026. The landing layer exists (mock and API
 ingesters); Bronze, Silver and Gold are designed here but not yet built.
+Stack: RustFS object storage (S3 API), Apache Iceberg tables in a JDBC
+catalog on Postgres, Apache Spark for both batch and Structured Streaming.
 The architecture and flows are drawn in
 [`architecture/sesame-platform.drawio`](architecture/sesame-platform.drawio).
 
@@ -20,6 +22,8 @@ The architecture and flows are drawn in
    never guesses a unit.
 5. **Bronze is append-only and keeps the raw payload**, so any Silver table
    can be rebuilt.
+6. **One writer per table.** Every Iceberg table is written by Spark only,
+   either a batch job or one Structured Streaming query, never both.
 
 ## 2. Conventions
 
@@ -61,10 +65,39 @@ grower whether they name a Dong Xuan season by its harvest year instead.
 
 | Layer | Storage | Written by | Content |
 | --- | --- | --- | --- |
-| Landing | MinIO bucket `landing-zone`, JSON | Python ingesters and mocks | Files exactly as the source returned them |
-| Bronze | Delta tables | Spark (batch and streaming) | One table per source, append-only, raw payload + metadata |
-| Silver | Delta tables | Spark batch | Typed, deduplicated, unit-converted dimensions and facts |
-| Gold | Delta tables | Spark batch | Season features, season summaries, alerts, predictions |
+| Landing | RustFS bucket `landing-zone`, JSON | Python ingesters and mocks | Files exactly as the source returned them |
+| Bronze | Iceberg tables, namespace `bronze` | Spark batch; Spark Structured Streaming for sensors | One table per source, append-only, raw payload + metadata |
+| Silver | Iceberg tables, namespace `silver` | Spark batch; Spark Structured Streaming for sensor readings | Typed, deduplicated, unit-converted dimensions and facts |
+| Gold | Iceberg tables, namespace `gold` | Spark batch | Season features, season summaries, alerts, predictions |
+
+### Storage and table format
+
+- **Object storage:** RustFS (Apache-2.0, S3-compatible) for development;
+  Ceph RGW in production. Everything talks to it through the S3 API (boto3
+  in Python, S3A in Spark), so swapping it changes configuration only.
+- **Table format:** Apache Iceberg. Tables live in the Spark catalog
+  `lakehouse`, so a full name is `lakehouse.<layer>.<table>`, e.g.
+  `lakehouse.silver.fact_weather_daily`. Files sit under
+  `s3a://lakehouse/warehouse/<layer>/<table>/`.
+- **Catalog:** Iceberg JDBC catalog in the Postgres database
+  `iceberg_catalog` (the same server as Airflow). A REST catalog is the
+  production option.
+- **Partitioning** (hidden partitioning, so queries filter on the column
+  itself and never need a derived partition column):
+
+| Table | Partition spec | Why |
+| --- | --- | --- |
+| `bronze.sensor_raw`, `silver.fact_sensor_reading` | `days(ts)` | Most queries read a day or a season of readings |
+| `silver.fact_weather_daily`, `gold.feat_season_daily` | `months(date)` | One row per day; months keep files from being too small |
+| `gold.alert_event` | `months(ts)` | Small, read by recent time |
+| Dimensions, `fact_field_operation`, `fact_harvest`, `agg_season_summary` | none | Small tables, updated with `MERGE` |
+
+- **Maintenance:** streaming writes many small files. A weekly Airflow job
+  runs `rewrite_data_files`, `expire_snapshots` (keep 7 days) and
+  `remove_orphan_files` on Bronze and Silver.
+- **Time travel:** a model is trained on a fixed table snapshot
+  (`VERSION AS OF <snapshot_id>`), recorded with the model, so results can be
+  reproduced.
 
 ## 4. Entity relationships (Silver and Gold)
 
@@ -124,8 +157,11 @@ Every Bronze table has these metadata columns:
 | `bronze.field_operation_raw` | Landing file | `farm_id`, `season_id`, `payload` |
 | `bronze.reference_raw` | Landing file | `reference_type` (`fao`, `agronomy`), `crop_id`, `payload` |
 
-`bronze.sensor_raw` keeps messages that cannot be parsed, so they can be
-replayed and sent to the DLQ topic `sesame.sensor.raw.dlq`.
+`bronze.sensor_raw` is written by a Spark Structured Streaming query that
+reads the Kafka topic `sesame.sensor.raw` (micro-batch about every minute,
+checkpoint under `s3a://lakehouse/checkpoints/sensor_raw`). It keeps messages
+that cannot be parsed, so they can be replayed and sent to the DLQ topic
+`sesame.sensor.raw.dlq`.
 
 ## 7. Silver dimensions
 
@@ -389,15 +425,25 @@ once `fact_harvest` covers several seasons.
 Failed sensor records go to `quarantine_sensor`; failed batch checks stop
 the Airflow DAG and alert Slack.
 
-## 11. Open decisions
+## 11. Decisions
+
+### Taken
+
+| Decision | Choice | Reason |
+| --- | --- | --- |
+| Streaming engine | Spark Structured Streaming (no Flink) | About one reading per device every 15 minutes and alerts measured in minutes; one engine for batch, streaming and ML. Kafka in front lets Flink be added later as another consumer |
+| Table format | Apache Iceberg | Engine-neutral (Spark, Trino, DuckDB), hidden partitioning, partition evolution, safe commits through a catalog |
+| Catalog | Iceberg JDBC catalog on Postgres | No extra service for the PoC; REST catalog in production |
+| Object storage | RustFS (dev), Ceph RGW (prod) | MinIO stopped shipping free images; both speak the S3 API |
+| Sensor path | Kafka → Spark Structured Streaming → Bronze | No Kafka Connect S3 sink and no Landing step for sensors |
+| Irrigation control | Rules on the field gateway, not in the cloud | A valve must react even when the network is down |
+
+### Open
 
 1. **Main weather source for ET0.** Proposed: NASA POWER, with sensors and
    OpenWeatherMap for comparison.
 2. **Keep OpenWeatherMap?** The current endpoint only returns a snapshot; a
    forecast needs One Call 3.0.
-3. **Sensor path into the lakehouse.** Proposed: Spark Structured Streaming
-   from Kafka straight to Bronze, instead of a Kafka Connect S3 sink into
-   Landing.
-4. **Season naming.** Sowing year (current) or harvest year.
-5. **Season length and stage split.** 75 days with a 15/25/25/10 split is an
+3. **Season naming.** Sowing year (current) or harvest year.
+4. **Season length and stage split.** 75 days with a 15/25/25/10 split is an
    assumption until the grower confirms it.

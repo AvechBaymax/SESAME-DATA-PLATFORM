@@ -3,9 +3,10 @@
 ## Start the local services
 
 1. Copy `.env.example` to `.env` and fill in `MINIO_ACCESS_KEY` and
-   `MINIO_SECRET_KEY` (MinIO wants a secret of at least 8 characters). On
-   Linux/WSL set `AIRFLOW_UID` to the number `id -u` prints, so Airflow can
-   write its logs.
+   `MINIO_SECRET_KEY`: the credentials of the S3-compatible object storage
+   (RustFS; the variable names are kept from the earlier MinIO setup). Use a
+   secret of at least 8 characters. On Linux/WSL set `AIRFLOW_UID` to the
+   number `id -u` prints, so Airflow can write its logs.
 2. From the repository root, create the mounted folders once and start the
    stack. `--env-file .env` matters: Compose otherwise looks for `.env` next to
    the Compose file.
@@ -15,36 +16,53 @@ mkdir -p logs plugins
 docker compose --env-file .env -f infrastructure/docker/docker-compose.yml up -d --build
 ```
 
+The stack: RustFS (object storage), Postgres (Airflow metadata and the Iceberg
+catalog), Kafka, a Spark master and worker, and Airflow.
+
 One Dockerfile (`infrastructure/docker/dockerfile`) builds two images that
 share the same extra Spark jars in `/opt/spark/extra-jars`:
 
 - `sesame-spark` (target `spark`): Spark master and worker.
 - `sesame-airflow` (target `airflow`): Airflow plus the PySpark driver.
 
-The jars are Delta Lake 3.3.0, `hadoop-aws` 3.3.4 with the AWS SDK bundle
-(S3A for MinIO) and the Spark Kafka source, all matching Spark 3.5.4.
-`infrastructure/spark/spark-defaults.conf` enables Delta, points S3A at
-`http://minio:9000` and reads the credentials from `AWS_ACCESS_KEY_ID` /
-`AWS_SECRET_ACCESS_KEY`, which Compose fills from the MinIO keys.
+The jars are Apache Iceberg 1.12.0 (Spark 3.5 runtime), the PostgreSQL JDBC
+driver, `hadoop-aws` 3.3.4 with the AWS SDK bundle (S3A) and the Spark Kafka
+source for Structured Streaming, all matching Spark 3.5.4.
 
-On start-up `airflow-init` creates the buckets `landing-zone` (raw files) and
-`lakehouse` (Delta tables), and `kafka-init` creates the topics
-`sesame.sensor.raw` and `sesame.sensor.raw.dlq`.
+`infrastructure/spark/spark-defaults.conf` makes `lakehouse` the default
+Spark catalog: an Iceberg **JDBC catalog** stored in the Postgres database
+`iceberg_catalog`, with table files under `s3a://lakehouse/warehouse`. S3A
+points at `http://rustfs:9000` and reads the credentials from
+`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, which Compose fills from the
+keys above. A table is addressed as `lakehouse.<layer>.<table>`, for example
+`lakehouse.silver.fact_weather_daily`.
 
-Check that Spark can write Delta tables to MinIO:
+On start-up:
+
+- Postgres creates the `iceberg_catalog` database on a fresh volume, and
+  `airflow-init` creates it on an existing one (`python -m common.init_catalog`).
+- `airflow-init` creates the buckets `landing-zone` (raw files) and
+  `lakehouse` (Iceberg tables) (`python -m common.init_buckets`).
+- `kafka-init` creates the topics `sesame.sensor.raw` and
+  `sesame.sensor.raw.dlq`.
+
+Check that Spark can create and update Iceberg tables on RustFS:
 
 ```bash
 docker exec spark-master /opt/spark/bin/spark-submit \
-    --master spark://spark-master:7077 /opt/spark-jobs/smoke_delta.py
-# -> Delta on MinIO OK: 5 rows at s3a://lakehouse/_smoke/delta_check, ...
+    --master spark://spark-master:7077 /opt/spark-jobs/smoke_iceberg.py
+# -> Iceberg OK: 3 rows, 2 day partitions, 2 snapshots at s3a://lakehouse/warehouse/smoke/sensor_check
 ```
 
 | Service | URL |
 | --- | --- |
 | Airflow | http://localhost:8080 (admin / admin) |
 | Spark master | http://localhost:8081 |
-| MinIO console | http://localhost:9001 |
+| RustFS console | http://localhost:9001 |
 | Kafka (from the host) | localhost:9092 |
+
+The Postgres user and password (`airflow` / `airflow`) and the Airflow admin
+login are local development defaults; production uses separate secrets.
 
 ## Mock data for the PoC
 
@@ -55,7 +73,7 @@ first), then run the modules with `python -m`:
 ```bash
 python3 -m pip install -r requirements.txt -e ".[dev]"
 
-# Farm/plot/season/device config, planned field operations and reference data -> MinIO
+# Farm/plot/season/device config, planned field operations and reference data -> object storage (landing-zone)
 python3 -m mock_iot.user_config_mock
 python3 -m mock_iot.mock_fao_db
 
@@ -82,7 +100,7 @@ with the others and with the weather. Useful options:
   plot; use the same values for `user_config_mock` so the data joins.
 
 API ingesters (need `.env`; `OWM_API_KEY` for OpenWeatherMap) land raw JSON in
-MinIO, defaulting to the same farm and location as the mocks:
+object storage, defaulting to the same farm and location as the mocks:
 
 ```bash
 python3 -m mock_iot.nasa_ingest
@@ -97,12 +115,12 @@ sections map to the Silver dimensions; the plan file lands under
 `field_operation/farm_id=.../season_id=.../` with one `planned` row per sowing,
 fertilizer, weed-control and harvest operation.
 
-Shared code lives in `src/common/`: `config` (`.env`, MinIO/Kafka settings,
-no default credentials), `minio_utils` (S3 client, `build_key`,
+Shared code lives in `src/common/`: `config` (`.env`, object storage/Kafka settings,
+no default credentials), `minio_utils` (S3 client for RustFS, `build_key`,
 `upload_raw_json`), `http_utils` (`get_json` with retry), plus sesame
 parameters from FAO-56 and the Binh Thuan guide (`crop`), soil hydraulics
 (`soil`), FAO-56 Penman-Monteith (`et0`) and the farm profile (`farm`).
-MinIO credentials are required: copy `.env.example` to `.env` and fill them
+Object storage credentials are required: copy `.env.example` to `.env` and fill them
 in. Run the tests with `python3 -m pytest`.
 
 ## Sesame farm monitoring dashboard

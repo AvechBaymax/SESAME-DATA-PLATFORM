@@ -2,7 +2,8 @@
 #   docker compose --env-file .env -f infrastructure/docker/docker-compose.yml up -d --build
 
 x-minio-credentials: &minio-credentials
-  # S3A in Spark reads the AWS_* names; the Python code reads MINIO_*.
+  # Object storage (RustFS) credentials. S3A in Spark reads the AWS_* names;
+  # the Python code reads MINIO_* (names kept from the MinIO setup).
   MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
   MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
   AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY}
@@ -38,9 +39,10 @@ x-airflow-common: &airflow-common
     # Connection to the Spark cluster (SparkSubmitOperator, conn_id=spark_default)
     AIRFLOW_CONN_SPARK_DEFAULT: "spark://spark-master:7077"
     # Settings for src/common and the ingest scripts, as seen from inside Docker
-    MINIO_ENDPOINT: http://minio:9000
+    MINIO_ENDPOINT: http://rustfs:9000
     MINIO_BUCKET: landing-zone
     LAKEHOUSE_BUCKET: lakehouse
+    ICEBERG_CATALOG_DB: iceberg_catalog
     KAFKA_BROKER: kafka:29092
     OWM_API_KEY: ${OWM_API_KEY:-}
   volumes:
@@ -55,19 +57,22 @@ x-airflow-common: &airflow-common
 
 services:
   # ---------------- Object storage ----------------
-  minio:
-    image: cgr.dev/chainguard/minio:latest
-    container_name: minio
-    user: root
+  # RustFS: Apache-2.0, S3-compatible (replaces MinIO, whose free images were discontinued).
+  # The MINIO_* variable names are kept for the S3 credentials used across the code.
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    container_name: rustfs
     ports:
       - "9000:9000"   # S3 API
       - "9001:9001"   # Console UI
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
     volumes:
-      - minio_data:/data
+      - rustfs_data:/data
 
   # ---------------- Kafka ----------------
   kafka:
@@ -150,6 +155,8 @@ services:
       POSTGRES_DB: airflow
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates the Iceberg JDBC catalog database on a fresh volume
+      - ../postgres/init-iceberg-catalog.sql:/docker-entrypoint-initdb.d/10-iceberg-catalog.sql:ro
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "airflow", "-d", "airflow"]
       interval: 5s
@@ -163,6 +170,7 @@ services:
       - -c
       - |
         python -m common.init_buckets &&
+        python -m common.init_catalog &&
         airflow db migrate &&
         airflow users create \
           --username admin --password admin \
@@ -171,7 +179,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
+      rustfs:
         condition: service_started
     restart: "no"
 
@@ -200,6 +208,6 @@ services:
     restart: always
 
 volumes:
-  minio_data:
+  rustfs_data:
   kafka_data:
   postgres_data:
