@@ -12,7 +12,7 @@ dev = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["common*", "mock_iot*"]
+include = ["common*", "mock_iot*", "lakehouse*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

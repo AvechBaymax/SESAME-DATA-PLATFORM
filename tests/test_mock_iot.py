@@ -188,3 +188,27 @@ def test_user_config_main_uploads_config_and_plan(monkeypatch):
     user_config_mock.main([])
     assert [u[0] for u in uploads] == ["user_config", "field_operation"]
     assert uploads[1][2] == {"farm_id": "BINHTHUAN_01", "season_id": "BINHTHUAN_01_P01_2026DX"}
+
+
+def test_mock_nasa_payload_matches_the_real_parser():
+    from mock_iot.mock_api_responses import nasa_payload
+
+    payload = nasa_payload(11.08, 108.12, date(2025, 11, 15), date(2025, 11, 20), seed="BINHTHUAN_01")
+    records = parse_nasa_power(payload)  # same parser the simulator uses for real NASA data
+    assert len(records) == 6
+    day = records[date(2025, 11, 15)]
+    assert set(day) == {"tmin_c", "tmax_c", "rh_pct", "wind_2m_m_s", "rs_mj_m2", "precip_mm"}
+    assert day["tmin_c"] < day["tmax_c"]
+    assert payload["parameters"]["ALLSKY_SFC_SW_DWN"]["units"] == "MJ/m^2/day"
+    assert payload["mock"] is True
+
+
+def test_mock_soilgrids_payload_converts_with_d_factor():
+    from mock_iot.mock_api_responses import soilgrids_payload
+
+    layers = {layer["name"]: layer for layer in soilgrids_payload(11.08, 108.12)["properties"]["layers"]}
+    sand = layers["sand"]["depths"][0]["values"]["mean"] / layers["sand"]["unit_measure"]["d_factor"]
+    clay = layers["clay"]["depths"][0]["values"]["mean"] / layers["clay"]["unit_measure"]["d_factor"]
+    from common.soil import texture_from_fractions
+    assert texture_from_fractions(sand, clay) == "loamy_sand"
+    assert [d["label"] for d in layers["phh2o"]["depths"]] == ["0-5cm", "5-15cm", "15-30cm", "30-60cm"]

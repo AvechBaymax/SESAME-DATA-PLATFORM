@@ -123,6 +123,36 @@ parameters from FAO-56 and the Binh Thuan guide (`crop`), soil hydraulics
 Object storage credentials are required: copy `.env.example` to `.env` and fill them
 in. Run the tests with `python3 -m pytest`.
 
+## Run the pipeline (PoC)
+
+Spark jobs live in `src/jobs/`, shared Spark code in `src/lakehouse/`, and the
+Airflow DAGs in `dags/`.
+
+| DAG | Schedule | What it does |
+| --- | --- | --- |
+| `sesame_poc_bootstrap` | manual | Uploads the farm/season config (sown 15/11/2025 by default), reference data, SoilGrids and the NASA POWER weather for the season, then loads them into Bronze |
+| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | NASA POWER (window D-14 to D-7) and OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze |
+
+Trigger the bootstrap from the Airflow UI, or run the same steps by hand:
+
+```bash
+python -m mock_iot.user_config_mock --planting-date 2025-11-15
+python -m mock_iot.mock_fao_db
+python -m mock_iot.isric_ingest
+python -m mock_iot.nasa_ingest --start 20251101 --end 20260215
+docker exec spark-master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 /opt/spark-jobs/landing_to_bronze.py --source all
+```
+
+`landing_to_bronze.py` loads only files it has not loaded before, so it can be
+re-run safely. When NASA POWER or SoilGrids cannot be reached, write payloads
+with the same structure (marked `"mock": true`) instead:
+
+```bash
+python -m mock_iot.mock_api_responses nasa --start 20251101 --end 20260215
+python -m mock_iot.mock_api_responses soilgrids
+```
+
 ## Sesame farm monitoring dashboard
 
 The `web/` dashboard reads farm weather and satellite data from a Python API

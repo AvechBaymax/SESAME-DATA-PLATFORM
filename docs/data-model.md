@@ -150,12 +150,17 @@ Every Bronze table has these metadata columns:
 | Table | Grain | Payload columns |
 | --- | --- | --- |
 | `bronze.sensor_raw` | Kafka message | `kafka_key`, `kafka_partition`, `kafka_offset`, `kafka_ts`, `headers` (incl. `x-mock-fault`), `value` (raw JSON string) |
-| `bronze.nasa_power_raw` | Landing file | `farm_id`, `payload` (JSON string) |
-| `bronze.owm_raw` | Landing file | `farm_id`, `payload` |
+| `bronze.nasa_power_raw` | Landing file | `farm_id`, `ingest_dt`, `payload` (JSON string) |
+| `bronze.owm_raw` | Landing file | `farm_id`, `dt`, `payload` |
 | `bronze.soilgrids_raw` | Landing file | `farm_id`, `payload` |
 | `bronze.user_config_raw` | Landing file | `farm_id`, `payload` |
 | `bronze.field_operation_raw` | Landing file | `farm_id`, `season_id`, `payload` |
-| `bronze.reference_raw` | Landing file | `reference_type` (`fao`, `agronomy`), `crop_id`, `payload` |
+| `bronze.reference_raw` | Landing file | `crop`, `reference_type` (`fao`, `agronomy`), `payload` |
+
+The batch tables are loaded by `src/jobs/landing_to_bronze.py`: one row per
+landing file, partition values parsed from the object key, and files already
+loaded (same `_file_path`) skipped, so re-runs add nothing twice. A file
+overwritten under the same key (e.g. `soilgrids.json`) is not reloaded.
 
 `bronze.sensor_raw` is written by a Spark Structured Streaming query that
 reads the Kafka topic `sesame.sensor.raw` (micro-batch about every minute,
