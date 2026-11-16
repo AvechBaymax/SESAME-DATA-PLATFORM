@@ -1,20 +1,21 @@
-"""PoC bootstrap: load one full simulated season into Landing and Bronze.
+"""PoC bootstrap: load one full simulated season into Landing, Bronze and Silver.
 
 Trigger manually once. It uploads the farm/season config and reference data,
-fetches SoilGrids and the NASA POWER weather for the season, then loads
-everything into Bronze. The season defaults to Dong Xuan 2025 (sown 15/11/2025),
-which has real NASA weather.
+fetches SoilGrids and the NASA POWER weather for the season, loads everything
+into Bronze, then builds the Silver tables. The farm dimensions are built before
+the Silver tables that reference them (soil layers, field operations). The
+season defaults to Dong Xuan 2025 (sown 15/11/2025), which has real NASA weather.
 """
 from datetime import datetime
 
 from airflow import DAG
 from airflow.models.param import Param
 
-from sesame_tasks import bronze, python_module
+from sesame_tasks import bronze, python_module, silver
 
 with DAG(
     dag_id="sesame_poc_bootstrap",
-    description="Load one simulated season (config, reference, soil, NASA weather) into Bronze",
+    description="Load one simulated season (config, reference, soil, NASA weather) into Bronze and Silver",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
@@ -32,7 +33,13 @@ with DAG(
     weather = python_module("ingest_nasa_season", "mock_iot.nasa_ingest",
                             "--start {{ params.nasa_start }} --end {{ params.nasa_end }}")
 
-    config >> [bronze("user_config"), bronze("field_operation")]
-    reference >> bronze("reference")
-    soil >> bronze("soilgrids")
-    weather >> bronze("nasa_power")
+    farm_dims = silver("user_config")  # dim_farm, dim_plot, dim_season, dim_device
+    field_operations = silver("field_operation")
+    soil_layers = silver("soilgrids")
+
+    config >> bronze("user_config") >> farm_dims
+    config >> bronze("field_operation") >> field_operations
+    reference >> bronze("reference") >> silver("reference")
+    soil >> bronze("soilgrids") >> soil_layers
+    weather >> bronze("nasa_power") >> silver("nasa_power")
+    farm_dims >> [field_operations, soil_layers]  # their foreign keys point at the farm dimensions

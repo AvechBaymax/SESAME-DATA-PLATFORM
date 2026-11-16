@@ -110,7 +110,8 @@ def main(argv=None):
                               settings=settings, farm_id=args.farm_id, ingest_dt=f"{now:%Y-%m-%d}")
     else:
         uri = upload_raw_json("soilgrids", soilgrids_payload(args.lat, args.lon),
-                              filename="soilgrids.json", settings=settings, farm_id=args.farm_id)
+                              filename=f"soilgrids_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_mock.json",
+                              settings=settings, farm_id=args.farm_id)
     print(f"Uploaded {uri}")
 
 

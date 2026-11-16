@@ -19,12 +19,12 @@ def test_partitions_match_landing_keys_written_by_the_ingesters():
     # Keys as written by nasa_ingest, user_config_mock and mock_fao_db
     nasa = "s3a://landing-zone/nasa_power/farm_id=BINHTHUAN_01/ingest_dt=2026-11-09/data_x.json"
     plan = "s3a://landing-zone/field_operation/farm_id=BINHTHUAN_01/season_id=BINHTHUAN_01_P01_2025DX/plan_x.json"
-    fao = "s3a://landing-zone/fao_reference/crop=sesame/fao_56_33_params.json"
+    fao = "s3a://landing-zone/fao_reference/crop=sesame/fao_56_33_params_20261109T120000Z.json"
     assert parse_partitions(nasa, SOURCES["nasa_power"].partitions) == {
         "farm_id": "BINHTHUAN_01", "ingest_dt": "2026-11-09"}
     assert parse_partitions(plan, SOURCES["field_operation"].partitions)["season_id"] == "BINHTHUAN_01_P01_2025DX"
     assert parse_partitions(fao, SOURCES["reference"].partitions) == {"crop": "sesame"}
-    assert parse_partitions("s3a://landing-zone/soilgrids/soilgrids.json", ("farm_id",)) == {"farm_id": None}
+    assert parse_partitions("s3a://landing-zone/soilgrids/soilgrids_20261109T120000Z.json", ("farm_id",)) == {"farm_id": None}
 
 
 def test_every_source_has_a_unique_table_and_constant_columns_cover_its_prefixes():

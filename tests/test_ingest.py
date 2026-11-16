@@ -40,7 +40,8 @@ def test_isric_requests_root_zone_properties(captured):
     isric_ingest.main(["--farm-id", "F2", "--lat", "11.1", "--lon", "108.0"])
     assert captured["params"]["lat"] == 11.1
     assert {"phh2o", "nitrogen", "sand", "clay"} <= set(captured["params"]["property"])
-    assert captured["filename"] == "soilgrids.json"
+    # a new file per run, so Bronze also loads a re-fetch
+    assert captured["filename"].startswith("soilgrids_") and captured["filename"].endswith("Z.json")
     assert captured["partitions"] == {"farm_id": "F2"}
 
 

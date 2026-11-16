@@ -8,16 +8,16 @@ Upload static sesame reference data to MinIO:
 Usage:
   python -m mock_iot.mock_fao_db
 
-Object keys:
-  fao_reference/crop=sesame/fao_56_33_params.json
-  agronomy_reference/crop=sesame/binh_thuan_black_2shell.json
+Object keys (a new file each run; Silver keeps the newest):
+  fao_reference/crop=sesame/fao_56_33_params_<UTC timestamp>.json
+  agronomy_reference/crop=sesame/binh_thuan_black_2shell_<UTC timestamp>.json
 """
 import argparse
 from datetime import datetime, timezone
 
 from common.config import add_minio_args, minio_settings_from_args
 from common.crop import BINH_THUAN_PRACTICE, SESAME_FAO
-from common.minio_utils import upload_raw_json
+from common.minio_utils import upload_raw_json, utc_now_compact
 
 
 def main(argv=None):
@@ -26,9 +26,10 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     now = datetime.now(timezone.utc).isoformat()
+    stamp = utc_now_compact()
     documents = {
-        ("fao_reference", "fao_56_33_params.json"): {**SESAME_FAO, "updated_at": now},
-        ("agronomy_reference", "binh_thuan_black_2shell.json"):
+        ("fao_reference", f"fao_56_33_params_{stamp}.json"): {**SESAME_FAO, "updated_at": now},
+        ("agronomy_reference", f"binh_thuan_black_2shell_{stamp}.json"):
             {**BINH_THUAN_PRACTICE, "updated_at": now},
     }
 

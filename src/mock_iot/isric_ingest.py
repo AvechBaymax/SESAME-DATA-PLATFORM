@@ -2,8 +2,8 @@
 Fetch SoilGrids v2.0 for one farm and store the raw JSON in MinIO (landing zone).
 
 Soil data is static, so this runs once per farm (not on a schedule).
-Object key layout (re-running for the same farm overwrites the file):
-  soilgrids/farm_id=<farm_id>/soilgrids.json
+Object key layout (every run writes a new file; Silver keeps the newest per farm):
+  soilgrids/farm_id=<farm_id>/soilgrids_<UTC timestamp>.json
 
 Usage (run from the repo root after `pip install -e .`):
   python -m mock_iot.isric_ingest --farm-id BINHTHUAN_01 --lat 11.08 --lon 108.12
@@ -13,7 +13,7 @@ import argparse
 from common.config import get_minio_settings
 from common.farm import DEFAULT_FARM_ID, DEFAULT_LAT, DEFAULT_LON
 from common.http_utils import get_json
-from common.minio_utils import upload_raw_json
+from common.minio_utils import upload_raw_json, utc_now_compact
 
 BASE_URL = "https://rest.isric.org/soilgrids/v2.0/properties/query"
 
@@ -41,7 +41,8 @@ def main(argv=None):
 
     uri = upload_raw_json(
         "soilgrids", payload,
-        filename="soilgrids.json",  # fixed name: one object per farm, idempotent re-runs
+        # A new name each run, so Bronze (which loads every file once) also picks up a re-fetch
+        filename=f"soilgrids_{utc_now_compact()}.json",
         settings=get_minio_settings(bucket=args.bucket),
         farm_id=args.farm_id,
     )

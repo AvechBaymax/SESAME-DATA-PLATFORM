@@ -1,8 +1,8 @@
-"""Create the MinIO buckets the platform needs, waiting until MinIO answers.
+"""Create the object-storage (RustFS) buckets the platform needs, waiting until it answers.
 
 Run by the airflow-init container:  python -m common.init_buckets
   landing-zone : raw files from ingesters and mocks (MINIO_BUCKET)
-  lakehouse    : Delta tables for Bronze/Silver/Gold (LAKEHOUSE_BUCKET)
+  lakehouse    : Iceberg tables for Bronze/Silver/Gold (LAKEHOUSE_BUCKET)
 """
 import os
 import sys
@@ -25,9 +25,9 @@ def main(timeout_s=120):
             break
         except (BotoCoreError, ClientError) as exc:
             if time.monotonic() > deadline:
-                print(f"MinIO not reachable at {settings.endpoint}: {exc}", file=sys.stderr)
+                print(f"Object storage not reachable at {settings.endpoint}: {exc}", file=sys.stderr)
                 return 1
-            print("waiting for MinIO...")
+            print("waiting for object storage...")
             time.sleep(2)
     for bucket in buckets:
         ensure_bucket(s3, bucket)

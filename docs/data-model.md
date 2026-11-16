@@ -1,7 +1,8 @@
 # Sesame Data Platform: Data Model
 
-Status: proposal, November 2026. The landing layer exists (mock and API
-ingesters); Bronze, Silver and Gold are designed here but not yet built.
+Status: November 2026. Landing, the batch Bronze tables and the batch Silver
+tables (sections 7 and 8, except the sensor tables) are built; the sensor
+stream and Gold are designed here but not yet built.
 Stack: RustFS object storage (S3 API), Apache Iceberg tables in a JDBC
 catalog on Postgres, Apache Spark for both batch and Structured Streaming.
 The architecture and flows are drawn in
@@ -130,11 +131,11 @@ All paths are in the `landing-zone` bucket and use Hive-style partitions.
 | --- | --- | --- | --- |
 | Farm/plot/season/device config | `user_config_mock.py` | Mock | `user_config/farm_id=<farm>/config_<ts>.json` |
 | Field operation plan | `user_config_mock.py` | Mock | `field_operation/farm_id=<farm>/season_id=<season>/plan_<ts>.json` |
-| FAO crop parameters | `mock_fao_db.py` | Static | `fao_reference/crop=sesame/fao_56_33_params.json` |
-| Binh Thuan cultivation guide | `mock_fao_db.py` | Static | `agronomy_reference/crop=sesame/binh_thuan_black_2shell.json` |
+| FAO crop parameters | `mock_fao_db.py` | Static | `fao_reference/crop=sesame/fao_56_33_params_<ts>.json` |
+| Binh Thuan cultivation guide | `mock_fao_db.py` | Static | `agronomy_reference/crop=sesame/binh_thuan_black_2shell_<ts>.json` |
 | NASA POWER daily weather | `nasa_ingest.py` | Real API | `nasa_power/farm_id=<farm>/ingest_dt=<date>/data_<start>_to_<end>_<hhmmss>Z.json` |
 | OpenWeatherMap current weather | `owm_ingest.py` | Real API | `weather/farm_id=<farm>/dt=<date>/data_<ts>.json` |
-| ISRIC SoilGrids | `isric_ingest.py` | Real API | `soilgrids/farm_id=<farm>/soilgrids.json` |
+| ISRIC SoilGrids | `isric_ingest.py` | Real API | `soilgrids/farm_id=<farm>/soilgrids_<ts>.json` |
 | Field sensors | `producer.py` | Mock | Not in Landing: Kafka topic `sesame.sensor.raw` goes straight to Bronze |
 
 ## 6. Bronze
@@ -159,8 +160,10 @@ Every Bronze table has these metadata columns:
 
 The batch tables are loaded by `src/jobs/landing_to_bronze.py`: one row per
 landing file, partition values parsed from the object key, and files already
-loaded (same `_file_path`) skipped, so re-runs add nothing twice. A file
-overwritten under the same key (e.g. `soilgrids.json`) is not reloaded.
+loaded (same `_file_path`) skipped, so re-runs add nothing twice. Every
+ingester writes a new, timestamped file per run (a file overwritten under the
+same key would not be reloaded), so Bronze keeps each version and Silver picks
+the newest.
 
 `bronze.sensor_raw` is written by a Spark Structured Streaming query that
 reads the Kafka topic `sesame.sensor.raw` (micro-batch about every minute,
@@ -169,6 +172,25 @@ that cannot be parsed, so they can be replayed and sent to the DLQ topic
 `sesame.sensor.raw.dlq`.
 
 ## 7. Silver dimensions
+
+The batch Silver tables are built by `src/jobs/bronze_to_silver.py
+--source <bronze source>`: it parses every Bronze payload, keeps the row from
+the newest landing file per primary key (latest `_ingested_at`, then
+`_file_path`), runs the checks in section 10 and MERGEs into
+`lakehouse.silver.<table>`. A row is only rewritten when a newer file supplies
+it, so re-runs leave the data unchanged. Schemas, keys, checks and parsers
+live in `src/lakehouse/silver.py`.
+
+Every Silver table also carries two lineage columns: `_file_path` (the
+landing file the row came from) and `_updated_at` (Silver write time).
+
+| Bronze source | Silver tables |
+| --- | --- |
+| `user_config` | `dim_farm`, `dim_plot`, `dim_season`, `dim_device` |
+| `reference` | `dim_growth_stage` |
+| `soilgrids` | `dim_soil_layer` |
+| `nasa_power` | `fact_weather_daily` (`source = 'nasa_power'`) |
+| `field_operation` | `fact_field_operation` |
 
 ### `dim_farm`
 
@@ -228,7 +250,8 @@ One row per crop and FAO stage; built from `fao_reference`.
 | --- | --- | --- |
 | `crop_id` | STRING, PK | `sesame` |
 | `stage` | STRING, PK | `initial`, `development`, `mid_season`, `late_season` |
-| `das_start`, `das_end` | INT | Stage window in days after sowing (15/25/25/10 split of 75 days) |
+| `stage_order` | INT | 1 to 4 |
+| `das_start`, `das_end` | INT | Stage window in days after sowing, `das_start` ≤ DAS < `das_end` (15/25/25/10 split of 75 days) |
 | `kc_start`, `kc_end` | DOUBLE | Crop coefficient at stage start and end (0.35 → 1.10 → 0.25) |
 
 ### `dim_soil_layer`
@@ -238,6 +261,7 @@ One row per crop and FAO stage; built from `fao_reference`.
 | `farm_id` | STRING | Farm (SoilGrids is queried at the farm point) | ingest partition |
 | `plot_id` | STRING, nullable | Set when a lab test exists for the plot | lab data |
 | `depth` | STRING | `0-5cm`, `5-15cm`, `15-30cm`, `30-60cm` | SoilGrids |
+| `top_cm`, `bottom_cm` | INT | Layer bounds, to weight layers over the root zone | SoilGrids `range` |
 | `sand_pct`, `clay_pct`, `silt_pct` | DOUBLE | Texture | SoilGrids g/kg ÷ 10 |
 | `ph` | DOUBLE | pH in water | SoilGrids `phh2o` ÷ 10 |
 | `soc_g_kg` | DOUBLE | Soil organic carbon | SoilGrids `soc` ÷ `d_factor` |
@@ -245,6 +269,7 @@ One row per crop and FAO stage; built from `fao_reference`.
 | `bulk_density_g_cm3` | DOUBLE | Bulk density | SoilGrids `bdod` ÷ 100 |
 | `cec_cmol_kg` | DOUBLE | Cation exchange capacity | SoilGrids `cec` ÷ `d_factor` |
 | `source` | STRING | `soilgrids` or `lab` | |
+| `is_mock` | BOOLEAN | Written by `mock_api_responses` instead of the API | payload `mock` |
 
 Read conversion factors from the response's `d_factor`; do not hard-code them.
 
@@ -289,12 +314,22 @@ they can be compared; NASA POWER is the proposed main input for ET0.
 | `date` | DATE (local) | response date | snapshot date | readings aggregated per day |
 | `source` | STRING | `nasa_power` | `owm` | `sensor` |
 | `tmin_c`, `tmax_c` | DOUBLE | `T2M_MIN`, `T2M_MAX` | min/max of snapshots | min/max of `air_temp_c` |
+| `tmean_c` | DOUBLE | `T2M` | mean `main.temp` | mean `air_temp_c` |
 | `rh_pct` | DOUBLE | `RH2M` | mean `main.humidity` | mean `rh_pct` |
 | `wind_2m_m_s` | DOUBLE | `WS2M` | `wind.speed` × 0.748 (10 m → 2 m) | mean `wind_m_s` |
 | `rs_mj_m2` | DOUBLE | `ALLSKY_SFC_SW_DWN` (check unit: MJ/m²/day with `community=ag`) | not available | Σ `solar_w_m2` × interval ÷ 10⁶ |
 | `precip_mm` | DOUBLE | `PRECTOTCORR` | `rain.1h` sums | Σ `rain_mm` |
 
-NASA POWER marks missing values with `-999`; these become NULL.
+| `is_mock` | BOOLEAN | payload `mock` | – | – |
+
+NASA POWER marks missing values with `-999` (`header.fill_value`); these
+become NULL, and a day with no value at all is dropped so it cannot replace
+a complete row from an older file. Radiation is converted to MJ/m²/day from
+the unit in the response (`kW-hr/m^2/day` × 3.6); an unknown unit fails the job.
+
+Built so far: NASA POWER only. OpenWeatherMap stays in Bronze, because the
+daily DAG takes one current-weather snapshot a day, which is not a daily
+minimum, maximum or rainfall total. Sensor rows come with the stream (Day 3).
 
 ### `fact_field_operation`
 
@@ -419,16 +454,34 @@ once `fact_harvest` covers several seasons.
 
 ## 10. Data quality checks
 
-| Layer / table | Checks (Great Expectations) |
+Implemented for the batch Silver tables in `src/lakehouse/quality.py` (plain
+Spark counts; Great Expectations can replace it later). Every table checks
+that its primary key is not NULL and unique, every rule below, and that each
+foreign key value exists in the referenced table. An error-level failure
+stops the job before the table is written, so the Airflow task fails; a
+warning is only printed in the task log.
+
+| Table | Error checks | Warnings |
+| --- | --- | --- |
+| `dim_farm` | latitude/longitude in range | |
+| `dim_plot` | `area_m2` > 0; known `soil_texture` and `drainage`; `farm_id` in `dim_farm` | |
+| `dim_season` | `planting_date` set; `expected_harvest_date` > `planting_date`; `plot_id` in `dim_plot` | sown outside Nov–Dec / Feb–Mar; `germination_pct` < 70; `purity_pct` < 99 |
+| `dim_device` | `plot_id` in `dim_plot` | |
+| `dim_growth_stage` | `das_end` > `das_start`; Kc between 0 and 2 | |
+| `dim_soil_layer` | pH 3–10; sand/clay/silt 0–100 %; `farm_id` in `dim_farm` | sand + clay + silt not within 100 ± 3 %; bulk density outside 0.5–2.2 |
+| `fact_weather_daily` | `tmin_c` ≤ `tmax_c`; `precip_mm`, `rs_mj_m2`, `wind_2m_m_s` ≥ 0; `rh_pct` 0–100 | temperature outside −10 to 50 °C |
+| `fact_field_operation` | known `status` and `op_type`; `actual_date` set when `status = done`; `season_id` in `dim_season` | |
+
+Planned for the next layers:
+
+| Layer / table | Checks |
 | --- | --- |
 | `bronze.sensor_raw` → `fact_sensor_reading` | Valid JSON and schema; `vwc_pct` 0–60; `rh_pct` 0–100; `air_temp_c` 5–50; `water_potential_kpa` < 0; no duplicate (`device_id`, `ts`); `device_id` exists in `dim_device` |
-| `fact_weather_daily` | `tmin_c` ≤ `tmax_c`; `precip_mm` ≥ 0; NASA rows not older than 10 days (freshness) |
-| `dim_season` | `planting_date` in a sowing window (warning only); `germination_pct` ≥ 70; `purity_pct` ≥ 99 |
-| `fact_field_operation` | Unique `operation_id`; `actual_date` set when `status = done` |
+| `fact_weather_daily` | NASA rows not older than 10 days (freshness, for the daily DAG) |
 | `fact_harvest` | `grain_moisture_pct` ≤ 7; `impurity_pct` ≤ 1 |
 
 Failed sensor records go to `quarantine_sensor`; failed batch checks stop
-the Airflow DAG and alert Slack.
+the Airflow DAG (a Slack alert is planned).
 
 ## 11. Decisions
 

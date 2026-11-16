@@ -121,7 +121,10 @@ no default credentials), `minio_utils` (S3 client for RustFS, `build_key`,
 parameters from FAO-56 and the Binh Thuan guide (`crop`), soil hydraulics
 (`soil`), FAO-56 Penman-Monteith (`et0`) and the farm profile (`farm`).
 Object storage credentials are required: copy `.env.example` to `.env` and fill them
-in. Run the tests with `python3 -m pytest`.
+in. Run the tests with `python3 -m pytest`. The Spark tests need Java (they
+are skipped without it); the Iceberg MERGE test also needs
+`ICEBERG_SPARK_JAR` set to an `iceberg-spark-runtime-3.5_2.12` jar, and the DAG
+tests run only where Airflow is installed.
 
 ## Run the pipeline (PoC)
 
@@ -130,8 +133,8 @@ Airflow DAGs in `dags/`.
 
 | DAG | Schedule | What it does |
 | --- | --- | --- |
-| `sesame_poc_bootstrap` | manual | Uploads the farm/season config (sown 15/11/2025 by default), reference data, SoilGrids and the NASA POWER weather for the season, then loads them into Bronze |
-| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | NASA POWER (window D-14 to D-7) and OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze |
+| `sesame_poc_bootstrap` | manual | Uploads the farm/season config (sown 15/11/2025 by default), reference data, SoilGrids and the NASA POWER weather for the season, loads them into Bronze, then builds Silver |
+| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | NASA POWER (window D-14 to D-7) into Bronze and Silver; OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze |
 
 Trigger the bootstrap from the Airflow UI, or run the same steps by hand:
 
@@ -142,10 +145,24 @@ python -m mock_iot.isric_ingest
 python -m mock_iot.nasa_ingest --start 20251101 --end 20260215
 docker exec spark-master /opt/spark/bin/spark-submit \
     --master spark://spark-master:7077 /opt/spark-jobs/landing_to_bronze.py --source all
+docker exec spark-master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 /opt/spark-jobs/bronze_to_silver.py --source all
 ```
 
 `landing_to_bronze.py` loads only files it has not loaded before, so it can be
-re-run safely. When NASA POWER or SoilGrids cannot be reached, write payloads
+re-run safely. `bronze_to_silver.py` parses the Bronze payloads into the Silver
+tables of `docs/data-model.md` (sections 7 and 8), keeps the newest landing
+file's row per key, checks the data (section 10; a failed check stops the job
+before writing) and MERGEs into `lakehouse.silver.<table>`, so it can be
+re-run too. Look at the result:
+
+```bash
+docker exec spark-master /opt/spark/bin/spark-sql --master spark://spark-master:7077 -e "
+  SHOW TABLES IN lakehouse.silver;
+  SELECT min(date), max(date), count(*) FROM lakehouse.silver.fact_weather_daily;" 2>/dev/null
+```
+
+ When NASA POWER or SoilGrids cannot be reached, write payloads
 with the same structure (marked `"mock": true`) instead:
 
 ```bash

@@ -18,14 +18,23 @@ def python_module(task_id, module, args=""):
     return BashOperator(task_id=task_id, bash_command=f"python -m {module} {args}".strip())
 
 
-def bronze(source):
-    """Load new landing files of one source into lakehouse.bronze.<table>."""
+def spark_job(task_id, job, source):
     return SparkSubmitOperator(
-        task_id=f"bronze_{source}",
+        task_id=task_id,
         conn_id="spark_default",
-        application=f"{SPARK_JOBS}/landing_to_bronze.py",
+        application=f"{SPARK_JOBS}/{job}",
         application_args=["--source", source],
-        name=f"bronze-{source}",
+        name=task_id.replace("_", "-"),
         pool=SPARK_POOL,
         retries=1,
     )
+
+
+def bronze(source):
+    """Load new landing files of one source into lakehouse.bronze.<table>."""
+    return spark_job(f"bronze_{source}", "landing_to_bronze.py", source)
+
+
+def silver(source):
+    """Build the Silver tables fed by one Bronze source (see lakehouse.silver.TABLES)."""
+    return spark_job(f"silver_{source}", "bronze_to_silver.py", source)
