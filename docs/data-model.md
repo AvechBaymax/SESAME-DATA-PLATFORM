@@ -39,7 +39,7 @@ The mocks already generate them this way (`src/common/farm.py`).
 | `plot_id` | `<farm_id>_P<nn>` | `BINHTHUAN_01_P01` |
 | `season_id` | `<plot_id>_<sowing year><season code>`; `DX` = Dong Xuan (sown Nov–Dec), `XH` = Xuan He (sown Feb–Mar), `KH` = outside both windows | `BINHTHUAN_01_P01_2026DX` |
 | `device_id` | `SN_<plot_id>_<nn>` | `SN_BINHTHUAN_01_P01_01` |
-| `operation_id` | `<season_id>_<op_type>_<DAS, 3 digits>` | `BINHTHUAN_01_P01_2026DX_fertilizer_015` |
+| `operation_id` | `<season_id>_<op_type>_<DAS, 3 digits>`; before sowing `pre<days, 2 digits>` | `BINHTHUAN_01_P01_2026DX_fertilizer_015`, `BINHTHUAN_01_P01_2026DX_weed_control_pre01` (Ronstar pre-emergence) |
 
 Open question: the season year follows the sowing year. Confirm with the
 grower whether they name a Dong Xuan season by its harvest year instead.
@@ -342,7 +342,7 @@ is updated to `done` when the field log arrives.
 | `season_id` | STRING, FK → `dim_season` | Season |
 | `plot_id` | STRING | Plot |
 | `op_type` | STRING | `sowing`, `fertilizer`, `weed_control`, `irrigation`, `spraying`, `harvest` |
-| `das` | INT | Planned day after sowing |
+| `das` | INT | Planned day after sowing; negative before sowing (Ronstar pre-emergence at −1) |
 | `planned_date` | DATE | `planting_date` + `das` |
 | `actual_date` | DATE, nullable | From the field log |
 | `status` | STRING | `planned` or `done` |

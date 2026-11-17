@@ -1,0 +1,186 @@
+{
+  "baseline_optimal": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "OK", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "cold_snap": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "temp_c": 18},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "VIOLATION", "R01": "VIOLATION", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "cool_morning": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "temp_c": 22},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "WARN", "R01": "WARN", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "heat_wave": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "temp_c": 33},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "WARN", "R01": "WARN", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "flowering_heavy_rain": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-25",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "rain_mm": 60},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-20", "ndvi": 0.61}],
+    "expected": {"overall_status": "VIOLATION", "R01": "OK", "R02": "OK", "R03": "VIOLATION", "R04": "OK", "R05": "WARN", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "flowering_moderate_rain": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-25",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "rain_mm": 25},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-20", "ndvi": 0.61}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "OK", "R03": "WARN", "R04": "OK", "R05": "WARN", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "heavy_rain_not_sensitive": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "rain_mm": 25},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "WARN", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "waterlogging": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "rain_mm": 40},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "VIOLATION", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "VIOLATION", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "drought_flowering": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-25",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 8, "rain_mm": 0},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-20", "ndvi": 0.61}],
+    "expected": {"overall_status": "VIOLATION", "R01": "OK", "R02": "OK", "R03": "WARN", "R04": "OK", "R05": "VIOLATION", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "dry_spell_short": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-25",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 4, "rain_mm": 0},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-20", "ndvi": 0.61}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "OK", "R03": "WARN", "R04": "OK", "R05": "WARN", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "rain_at_harvest": {
+    "planting_date": "2026-11-10",
+    "as_of": "2027-01-15",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": 3, "rain_mm": 25},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2027-01-10", "ndvi": 0.58}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "OK", "R03": "WARN", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "low_season_rain": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-25",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 2, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-20", "ndvi": 0.61}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "WARN", "R03": "WARN", "R04": "OK", "R05": "WARN", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "excess_season_rain": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-30",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 12, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-20", "ndvi": 0.61}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "WARN", "R03": "WARN", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "early_days": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-11-20",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-11-20", "ndvi": 0.40}],
+    "expected": {"overall_status": "OK", "R01": "OK", "R02": "NO_DATA", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "ph_acidic": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 5.0, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "VIOLATION", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "VIOLATION", "R07": "OK", "R08": "OK"}
+  },
+  "ph_edge": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 5.6, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "WARN", "R07": "OK", "R08": "OK"}
+  },
+  "ph_alkaline": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 8.0, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "VIOLATION", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "VIOLATION", "R07": "OK", "R08": "OK"}
+  },
+  "clay_soil": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 6.5, "sand_g_kg": 200, "clay_g_kg": 500},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "WARN", "R08": "OK"}
+  },
+  "off_season_planting": {
+    "planting_date": "2026-10-01",
+    "as_of": "2026-10-31",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-10-20", "ndvi": 0.52}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "NO_DATA", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "WARN"}
+  },
+  "harvest_window": {
+    "planting_date": "2026-10-01",
+    "as_of": "2026-12-15",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "OK", "R01": "OK", "R02": "OK", "R03": "OK", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "WARN"}
+  },
+  "heavy_rain_at_harvest": {
+    "planting_date": "2026-10-01",
+    "as_of": "2026-12-16",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 6, "daily_humidity_pct": 75, "last_n_days": 3, "rain_mm": 30},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-10", "ndvi": 0.55}],
+    "expected": {"overall_status": "WARN", "R01": "OK", "R02": "OK", "R03": "WARN", "R04": "OK", "R05": "N/A", "R06": "OK", "R07": "OK", "R08": "WARN"}
+  },
+  "no_weather": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"series": []},
+    "soil": {"ph": 6.5, "sand_g_kg": 700, "clay_g_kg": 150},
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "OK", "R01": "NO_DATA", "R02": "NO_DATA", "R03": "NO_DATA", "R04": "NO_DATA", "R05": "NO_DATA", "R06": "OK", "R07": "OK", "R08": "OK"}
+  },
+  "no_soil": {
+    "planting_date": "2026-11-10",
+    "as_of": "2026-12-10",
+    "weather": {"daily_temp_c": 27, "daily_rain_mm": 7, "daily_humidity_pct": 75, "last_n_days": null},
+    "soil": null,
+    "satellite": [{"date": "2026-12-05", "ndvi": 0.55}, {"date": "2026-12-10", "ndvi": 0.60}],
+    "expected": {"overall_status": "OK", "R01": "OK", "R02": "OK", "R03": "N/A", "R04": "OK", "R05": "N/A", "R06": "NO_DATA", "R07": "NO_DATA", "R08": "OK"}
+  }
+}

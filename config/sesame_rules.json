@@ -1,0 +1,117 @@
+{
+  "version": "1.0",
+  "source_document": "Quy trình kỹ thuật canh tác mè đen 2 vỏ Bình Thuận",
+  "crop": {
+    "season_days": 75,
+    "season_days_source": "assumed: the guide gives no season length; harvest follows the 2/3 yellow pods sign",
+    "stages_das": {
+      "initial": [0, 14],
+      "development": [15, 39],
+      "mid_season": [40, 64],
+      "late_season": [65, 74]
+    },
+    "harvest_das": 75
+  },
+  "rules": {
+    "R01_temperature": {
+      "window_days": 3,
+      "ok": [25, 30],
+      "warn_low": [20, 25],
+      "violation_below": 20,
+      "warn_above": 30,
+      "sources": {"ok": "document", "violation_below": "document", "warn_low": "derived", "warn_above": "assumed"},
+      "doc_ref": "I.1, II.1"
+    },
+    "R02_rainfall_season": {
+      "season_min_mm": 500,
+      "season_max_mm": 600,
+      "min_das_for_projection": 15,
+      "sources": {"range": "document", "projection": "derived"},
+      "doc_ref": "I.1, II.1"
+    },
+    "R03_heavy_rain_sensitive_stage": {
+      "active_stages": ["mid_season", "late_season", "harvest"],
+      "window_days": 3,
+      "warn_mm_per_day": 20,
+      "violation_mm_per_day": 50,
+      "sources": {"active_stages": "document", "thresholds": "assumed"},
+      "doc_ref": "I.1, I.10"
+    },
+    "R04_waterlogging": {
+      "window_days": 3,
+      "warn_mm_sum": 60,
+      "violation_mm_sum": 100,
+      "sources": {"thresholds": "assumed"},
+      "doc_ref": "I.4, I.7, I.9"
+    },
+    "R05_dry_spell_flowering": {
+      "active_stages": ["mid_season"],
+      "dry_day_mm_below": 1.0,
+      "warn_consecutive_days": 4,
+      "violation_consecutive_days": 7,
+      "sources": {"active_stages": "derived", "thresholds": "assumed"},
+      "doc_ref": "I.7, II.7"
+    },
+    "R06_soil_ph": {
+      "ok": [5.5, 7.5],
+      "edge_margin": 0.2,
+      "sources": {"ok": "document", "edge_margin": "assumed"},
+      "doc_ref": "I.2, II.2"
+    },
+    "R07_soil_texture": {
+      "ok_classes": ["sandy loam", "loamy sand", "loam", "sand"],
+      "ok_if_drained_classes": ["silt loam", "silt", "clay loam", "silty clay loam", "sandy clay loam"],
+      "sources": {"ok_classes": "derived", "ok_if_drained_classes": "derived"},
+      "doc_ref": "I.2, II.2"
+    },
+    "R08_sowing_window": {
+      "ok_months": [11, 12, 2, 3],
+      "sources": {"ok_months": "document"},
+      "doc_ref": "I.3, II.3"
+    },
+    "R09_care_schedule": {
+      "upcoming_days_before": 3,
+      "due_days_after": 2,
+      "tasks": [
+        {"id": "land_prep", "label": "Làm đất: cày sâu 15 cm, tơi xốp, bằng phẳng; vùng khó thoát nước lên luống cao 15–20 cm", "das": -3, "source": "assumed", "note": "Tài liệu không ghi ngày cụ thể, chỉ ghi làm đất kết hợp bón lót trước khi gieo"},
+        {"id": "pre_emergence", "label": "Phun Ronstar tiền nảy mầm trên mặt đất khi đất đủ ẩm", "das": -1, "source": "assumed", "note": "Tài liệu ghi 'trước gieo', ngày cụ thể là giả định"},
+        {"id": "seed_treatment", "label": "Xử lý hạt giống: 2 g Rovral / 1 kg hạt (Vibasu, Basudin nếu có kiến)", "das": 0, "source": "document"},
+        {"id": "basal", "label": "Bón lót (phân hữu cơ, vôi, super lân, 1/3 urê, 1/3 KCl hoặc 150–200 kg NPK 16-16-8)", "das": 0, "source": "document"},
+        {"id": "sowing", "label": "Gieo: 3 kg/ha, rạch hàng sâu 4–5 cm, hàng cách 60 cm, hốc cách 15 cm, lấp nhẹ và kín", "das": 0, "source": "document"},
+        {"id": "topdress_1", "label": "Bón thúc lần 1: 1/3 urê + 1/3 KCl (hoặc bón 1 lần vào ngày 20)", "das": 15, "source": "document"},
+        {"id": "weed_1", "label": "Phun Dual / xới xáo lần 1, kết hợp bón thúc", "das": 15, "source": "document"},
+        {"id": "topdress_2", "label": "Bón thúc lần 2: 1/3 urê + 1/3 KCl còn lại", "das": 25, "source": "document"},
+        {"id": "weed_2", "label": "Phun Dual / xới xáo lần 2, kết hợp bón thúc", "das": 25, "source": "document"},
+        {"id": "flowering_water", "label": "Ra hoa: tưới đều, tuyệt đối không để hạn; tránh úng cục bộ", "das": 40, "source": "document"},
+        {"id": "harvest_check", "label": "Kiểm tra thu hoạch: khoảng 2/3 trái và lá chuyển vàng", "das": 70, "source": "assumed"},
+        {"id": "harvest", "label": "Thu hoạch (dự kiến), chọn ngày nắng ráo; bó 10–15 cm, dựng 3–5 ngày, phơi 2–3 nắng", "das": 75, "source": "derived"}
+      ],
+      "manual_tasks": [
+        {"id": "thin", "label": "Tỉa thưa khi cây có 2 lá thật, chừa 60 x 15 cm, 1–2 cây/hốc (gieo sạ: còn 10–20 cây/m²)", "trigger": "2 lá thật", "source": "document"},
+        {"id": "pest_scout", "label": "Thăm đồng: sâu gai, sâu xám, rệp, sâu đục thân, bọ xít; bệnh đốm khô, héo khô, virus. Chỉ phun khi có dấu hiệu để bảo vệ ong", "trigger": "khi thấy sâu bệnh", "source": "document"},
+        {"id": "drain", "label": "Thoát nước ngay khi mưa lớn, không để úng cục bộ (chống úng là phòng bệnh)", "trigger": "sau mưa lớn", "source": "document"}
+      ]
+    },
+    "R10_ndvi": {"mode": "info"},
+    "R11_humidity": {"mode": "info"}
+  },
+  "manual_checklist": [
+    {"id": "M01", "item": "Lượng giống", "value": "3 kg/ha", "doc_ref": "I.5, II.5"},
+    {"id": "M02", "item": "Xử lý hạt giống", "value": "2 g Rovral / 1 kg hạt; có kiến thì dùng Vibasu, Basudin", "doc_ref": "I.5, II.5"},
+    {"id": "M03", "item": "Làm đất", "value": "Cày sâu 15 cm, tơi xốp, bằng phẳng, bón lót", "doc_ref": "I.4, II.4"},
+    {"id": "M04", "item": "Lên luống (vùng khó thoát nước)", "value": "Cao 15–20 cm, rộng 0,5–1,5 m, rãnh 20–30 cm", "doc_ref": "I.4, II.4"},
+    {"id": "M05", "item": "Gieo hàng", "value": "Rạch sâu 4–5 cm, hàng cách 60 cm, hốc cách 15 cm, lấp nhẹ và kín", "doc_ref": "I.5, II.5"},
+    {"id": "M06", "item": "Gieo sạ", "value": "Lấp sâu khoảng 1,5 cm, đất khô có thể sâu hơn nhưng không quá 5 cm; tỉa thưa còn 10–20 cây/m2 nếu dày", "doc_ref": "II.5, II.8"},
+    {"id": "M07", "item": "Lượng phân/ha", "value": "120N + 60 P2O5 + 60 K2O + 300 kg vôi + 1000 kg hữu cơ vi sinh (= 260 kg urê + 375 kg super lân + 100 kg KCl); hoặc NPK 16-16-8 750 kg/ha", "doc_ref": "I.6, II.6"},
+    {"id": "M08", "item": "Cách chia phân", "value": "Bón lót: toàn bộ hữu cơ, vôi, super lân + 1/3 urê + 1/3 KCl. Bón thúc phần còn lại chia 2 lần (15 và 25 ngày sau gieo; hoặc 1 lần ở 20 ngày). Dùng NPK 16-16-8 thì bón lót 150–200 kg/ha. Không “trồng chay”", "doc_ref": "I.6, II.6"},
+    {"id": "M09", "item": "Tiêu chuẩn hạt giống (mục I)", "value": "Độ sạch >= 99%; hạt cỏ dại nguy hiểm <= 5/kg; hạt khác giống <= 20%; nảy mầm >= 70%; độ ẩm <= 12% (bao thường) hoặc <= 10% (bao không thấm nước). Bảng trích từ file Word bị lẫn dòng, cần đối chiếu bản gốc", "doc_ref": "I.11"},
+    {"id": "M10", "item": "Tiêu chuẩn hạt (mục II)", "value": "Độ ẩm tối đa 7%; tạp chất tối đa 1%; không lẫn giống khác; không mốc", "doc_ref": "II.11"},
+    {"id": "M11", "item": "Bảo quản", "value": "Bao có lớp ni lông, kê cách nền kho tối thiểu 10 cm, phơi lại 1–2 tháng/lần", "doc_ref": "I.11"},
+    {"id": "M12", "item": "Thu hoạch và sau thu hoạch", "value": "Thu khi 2/3 trái và lá vàng, trời nắng ráo (sớm thì hạt lép, trễ thì nứt trái rơi hạt). Bó 10–15 cm, dựng đứng 3–5 ngày, đập hạt, sàng sảy, phơi 2–3 nắng; có thể ủ mát 2–4 ngày nhưng không chất thành đống", "doc_ref": "I.10, II.10"},
+    {"id": "M13", "item": "Tưới, tiêu nước", "value": "Mè rất sợ úng: tưới bằng vòi sen hoặc theo rãnh; mùa mưa tránh úng cục bộ khi gieo; mùa khô tưới đều, tuyệt đối không để hạn khi ra hoa", "doc_ref": "I.7, II.7"},
+    {"id": "M14", "item": "Phòng trừ cỏ dại", "value": "Làm cỏ tay hoặc xe đẩy cỏ, giữ sạch cỏ từ khi mọc đến ra hoa và khép tán; Ronstar tiền nảy mầm trước gieo khi đất đủ ẩm, hoặc Dual lúc 15 và 25 ngày sau gieo, xới xáo kết hợp bón thúc", "doc_ref": "I.8, II.8"},
+    {"id": "M15", "item": "Sâu bệnh hại", "value": "Sâu: sâu gai, sâu xám, rệp, sâu đục thân, bọ xít (Hopsan, Bassa, Fastac). Bệnh: đốm khô, héo khô, virus do rầy rệp (Champion, Vicarben). Vệ sinh đồng ruộng, chống úng, mật độ hợp lý; chỉ phun khi có dấu hiệu để bảo vệ ong", "doc_ref": "I.9, II.9"},
+    {"id": "M16", "item": "Đất trồng", "value": "pH 5,5–7,5; đất thịt pha cát, cát pha, phù sa (cả đất xám, đất đỏ, đất cát) không phèn mặn, không úng; cày bừa tơi xốp", "doc_ref": "I.2, II.2"},
+    {"id": "M17", "item": "Giữ giống cho vụ sau", "value": "Chọn cây nhiều trái phơi riêng thật khô, sàng sảy, gói nhiều lớp giấy báo, bỏ vào chậu/chum, phủ 1 lớp tro, đậy kín", "doc_ref": "II.11"}
+  ]
+}

@@ -107,7 +107,8 @@ def generate_mock_config(farm, seed_lot=None):
 
 def _operation(farm, op_type, das, details):
     return {
-        "operation_id": f"{farm.season_id}_{op_type}_{das:03d}",
+        # Before sowing (negative DAS) the suffix is "pre" + days, e.g. _weed_control_pre01.
+        "operation_id": f"{farm.season_id}_{op_type}_{das:03d}" if das >= 0 else f"{farm.season_id}_{op_type}_pre{-das:02d}",
         "season_id": farm.season_id,
         "plot_id": farm.plot_id,
         "op_type": op_type,
@@ -127,19 +128,29 @@ def generate_field_operation_plan(farm):
     """
     sowing = BINH_THUAN_PRACTICE["sowing"]
     fertilizer = BINH_THUAN_PRACTICE["fertilizer"]
+    weeds = BINH_THUAN_PRACTICE["weed_control"]
     ops = [_operation(farm, "sowing", 0, {
         "seed_rate_kg_ha": sowing["seed_rate_kg_ha"],
         "row_spacing_cm": sowing["row_spacing_cm"],
         "hill_spacing_cm": sowing["hill_spacing_cm"],
+        "sowing_depth_cm": sowing["sowing_depth_cm"],
+        "seed_treatment": sowing["seed_treatment"],
     })]
+    ops.append(_operation(farm, "weed_control", weeds["pre_emergence"]["das"], {
+        "method": "pre-emergent herbicide on moist soil before sowing",
+        "product": weeds["pre_emergence"]["product"],
+    }))
     for event in fertilizer["schedule"]:
         ops.append(_operation(farm, "fertilizer", event["das"], {
             "application": event["type"],
             "products_kg_ha": {name: round(fertilizer["products_kg_ha"][name] * share, 1)
                                for name, share in event["share"].items()},
         }))
-    for das in BINH_THUAN_PRACTICE["weed_control_das"]:
-        ops.append(_operation(farm, "weed_control", das, {"method": "manual or pre-emergent herbicide"}))
+    for das in weeds["post_emergence"]["das"]:
+        ops.append(_operation(farm, "weed_control", das, {
+            "method": "herbicide or hand weeding, with hoeing and topdressing",
+            "product": weeds["post_emergence"]["product"],
+        }))
     ops.append(_operation(farm, "harvest", season_length(), {
         "trigger": BINH_THUAN_PRACTICE["harvest"]["trigger"],
     }))

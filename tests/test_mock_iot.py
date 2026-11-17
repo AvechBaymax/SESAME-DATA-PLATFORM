@@ -163,7 +163,11 @@ def test_field_operation_plan_matches_guide():
     by_type = {}
     for op in ops:
         by_type.setdefault(op["op_type"], []).append(op["das"])
-    assert by_type == {"sowing": [0], "fertilizer": [0, 15, 25], "weed_control": [15, 25], "harvest": [75]}
+    assert by_type == {"sowing": [0], "fertilizer": [0, 15, 25], "weed_control": [-1, 15, 25], "harvest": [75]}
+    pre = next(op for op in ops if op["das"] < 0)
+    assert pre["operation_id"].endswith("_weed_control_pre01") and pre["details"]["product"] == "Ronstar"
+    sowing = next(op for op in ops if op["op_type"] == "sowing")
+    assert sowing["details"]["seed_treatment"]["g_per_kg_seed"] == 2
     totals = {}
     for op in ops:
         for product, kg in op["details"].get("products_kg_ha", {}).items():
@@ -171,7 +175,7 @@ def test_field_operation_plan_matches_guide():
     assert totals["urea"] == pytest.approx(260, abs=0.5)
     assert totals["kcl"] == pytest.approx(100, abs=0.5)
     assert totals["super_lan"] == 375
-    assert ops[0]["planned_date"] == farm.planting_date.isoformat()
+    assert sowing["planned_date"] == farm.planting_date.isoformat()
     topdress = next(op for op in ops if op["operation_id"].endswith("_fertilizer_015"))
     assert topdress["planned_date"] == "2026-11-30"
 

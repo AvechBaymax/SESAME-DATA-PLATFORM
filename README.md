@@ -170,14 +170,29 @@ python -m mock_iot.mock_api_responses nasa --start 20251101 --end 20260215
 python -m mock_iot.mock_api_responses soilgrids
 ```
 
-## Sesame farm monitoring dashboard
+## OpenSesame dashboard
 
-The `web/` dashboard reads farm weather and satellite data from a Python API
-backed by Google Earth Engine. It uses the configured Cu Chi point at
-11.00° N, 106.40° E. ERA5-Land supplies daily temperature, precipitation, and
+`web/` is the OpenSesame front end: plain HTML/CSS/JS (no build step) with
+five pages routed in the browser:
+
+| Path | Page |
+| --- | --- |
+| `/` | Region overview: program shortfalls, KPIs, production map, supply forecast, stage distribution, province weather, farm list |
+| `/farm/<id>` | Farm detail: satellite map with blocks (colour by status, forecast, logs or quality), forecast, current weather, alerts, blocks |
+| `/farm/<id>/block/<B01>` | Block detail: location, soil moisture, activity log |
+| `/product` | Products and lineage (harvest batch → factory intake → processing → product) |
+| `/qr/<sku>` | Traceability page with a QR code |
+
+Data: the 13 region farms, their blocks and the products are **mock data**
+(`web/data.js`, deterministic). The real farm (`CUCHI_02`, marked *Dữ liệu
+thật*) comes from `/api/monitor`, and the province weather cards come live from
+Open-Meteo. Basemaps are Esri (street map and World Imagery, no API key).
+
+For the real farm, `/api/monitor` reads Google Earth Engine at the configured
+point (Cu Chi, 11.00° N, 106.40° E by default). ERA5-Land supplies daily temperature, precipitation, and
 dew-point estimates; Sentinel-2 supplies NDVI; SoilGrids supplies soil texture
 and pH; SRTM supplies elevation. These are satellite/reanalysis estimates,
-not live on-field sensor measurements. The field outline is illustrative.
+not live on-field sensor measurements.
 
 **Local run:** install the root `requirements.txt`, authenticate Earth Engine
 once in your user account, then start the dashboard:
@@ -193,6 +208,39 @@ The API uses the project ID from the supplied script by default. Set
 `GEE_PROJECT_ID` in `web/.env` to override it. The selected Google Cloud
 project must have the Earth Engine API enabled and be registered for Earth
 Engine.
+
+**Crop rules.** `/api/monitor` also checks the current season against the
+black sesame guide (`config/sesame_rules.json`, rules R01-R11: temperature,
+season and heavy rain, waterlogging, dry spell at flowering, soil pH and
+texture, sowing window, care schedule, NDVI, humidity) and the dashboard shows
+the result under **Crop rules**. The weather rules use the ERA5-Land days since
+sowing, so they report `NO_DATA` until ERA5-Land (a few days behind real time)
+covers the season. Settings, in `web/.env` or the Vercel environment:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SEASON_PLANTING_DATE` | `2026-11-15` | Sowing date of the season the rules check |
+| `FARM_ID`, `FARM_LAT`, `FARM_LON` | `CUCHI_02`, `11.0`, `106.4` | Point queried in Earth Engine |
+| `ALLOW_SIMULATION` | `1` | `0` turns off `/api/evaluate` |
+| `FARM_AREA_M2` | `5000` | Field area; draws an approximate (dashed) outline on the map |
+| `FARM_BOUNDARY_GEOJSON` | empty | Real field outline, a GeoJSON Polygon in lon/lat, e.g. `{"type":"Polygon","coordinates":[[[106.4,11.0],...]]}` |
+
+**Field map.** *Your land* shows the field on a Leaflet map: Esri World
+Imagery as the high-resolution base (no API key), plus a Sentinel-2 true-color
+composite of the last 60 days and an NDVI overlay served as Earth Engine tiles
+by `/api/monitor` (switch them in the map's layer control). **Google Maps ↗**
+opens the same point in Google Maps satellite view.
+
+The rule code lives in `api/_rules.py` (files starting with `_` are helpers,
+not Vercel functions). `POST /api/evaluate` runs the rules on a test scenario
+from `config/scenarios.json` (optionally with overrides) or on a posted
+context, without Earth Engine. With the local server running:
+
+```bash
+python3 scripts/push_test_data.py --all                       # every scenario vs. its "expected"
+python3 scripts/push_test_data.py --scenario cold_snap --set weather.temp_c=15
+curl -X POST localhost:8765/api/evaluate -d '{"scenario": "waterlogging"}'
+```
 
 **Vercel deployment:** import this repository and keep **Root Directory** at
 the repository root. `vercel.json` serves the dashboard from `web/` and the

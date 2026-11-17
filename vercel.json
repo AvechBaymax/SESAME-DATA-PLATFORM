@@ -1,6 +1,10 @@
 {
+  "functions": {
+    "api/*.py": { "includeFiles": "config/**" }
+  },
   "rewrites": [
     { "source": "/", "destination": "/web/index.html" },
-    { "source": "/(.*)", "destination": "/web/$1" }
+    { "source": "/((?!api/)[^.]*)", "destination": "/web/index.html" },
+    { "source": "/((?!api/).*)", "destination": "/web/$1" }
   ]
 }

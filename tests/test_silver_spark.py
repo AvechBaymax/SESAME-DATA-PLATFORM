@@ -6,6 +6,7 @@ iceberg-spark-runtime-3.5_2.12-<version>.jar to run it.
 import json
 import os
 import shutil
+import subprocess
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -13,8 +14,20 @@ from pathlib import Path
 import pytest
 
 pyspark = pytest.importorskip("pyspark")
-if shutil.which("java") is None:
-    pytest.skip("Java is required for Spark", allow_module_level=True)
+
+
+def _java_works():
+    """macOS ships a /usr/bin/java stub that fails without a JDK, so run it."""
+    if shutil.which("java") is None:
+        return False
+    try:
+        return subprocess.run(["java", "-version"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+if not _java_works():
+    pytest.skip("A working Java runtime is required for Spark", allow_module_level=True)
 
 from jobs.bronze_to_silver import build  # noqa: E402
 from lakehouse import quality  # noqa: E402

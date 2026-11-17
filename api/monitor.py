@@ -1,22 +1,26 @@
+"""GET /api/monitor?days=7|30: Earth Engine field data plus the sesame rules for the season."""
 import json
 import logging
 import math
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import ee
-from dotenv import load_dotenv
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:  # Vercel runs this file directly
+    sys.path.insert(0, str(ROOT))
+
+from api._farm import LATITUDE, LONGITUDE, MAX_SEASON_DAYS, farm_summary, planting_date  # noqa: E402
+from api._rules import evaluate_rules  # noqa: E402
 
 logger = logging.getLogger(__name__)
-load_dotenv()
 PROJECT_ID = os.getenv("GEE_PROJECT_ID", "gen-lang-client-0646614400")
 SERVICE_ACCOUNT_JSON = os.getenv("GEE_SERVICE_ACCOUNT_JSON", "")
-FARM_ID = "CUCHI_02"
-LATITUDE = 11.0
-LONGITUDE = 106.4
 
 
 def _number(value):
@@ -102,18 +106,51 @@ def _get_weather(point, start_date, end_date):
     return series
 
 
-def _get_satellite(point, start_date, end_date):
-    def mask_clouds(image):
-        scl = image.select("SCL")
-        clear = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10)).And(scl.neq(11))
-        return image.updateMask(clear).copyProperties(image, ["system:time_start"])
+def _mask_s2_clouds(image):
+    """Drop Sentinel-2 cloud shadow, cloud and cirrus pixels (scene classification)."""
+    scl = image.select("SCL")
+    clear = scl.neq(3).And(scl.neq(8)).And(scl.neq(9)).And(scl.neq(10)).And(scl.neq(11))
+    return image.updateMask(clear).copyProperties(image, ["system:time_start"])
 
+
+# Sentinel-2 composite of the last MAP_COMPOSITE_DAYS shown as map layers.
+MAP_COMPOSITE_DAYS = 60
+NDVI_PALETTE = ["#a5432c", "#d9a441", "#f2e7a0", "#9cc779", "#3f8f3a", "#1e5b25"]
+
+
+def _get_map_layers(point, today):
+    """Earth Engine tile URLs ({z}/{x}/{y}) for a recent cloud-free Sentinel-2 composite."""
+    start = (today - timedelta(days=MAP_COMPOSITE_DAYS)).isoformat()
+    collection = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(point)
+        .filterDate(start, today.isoformat())
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 60))
+        .map(_mask_s2_clouds)
+    )
+    count = collection.size().getInfo()
+    if not count:
+        return None
+    composite = collection.median()
+    true_color = composite.getMapId({"bands": ["B4", "B3", "B2"], "min": 0, "max": 3000, "gamma": 1.3})
+    ndvi = composite.normalizedDifference(["B8", "B4"]).getMapId(
+        {"min": 0, "max": 0.8, "palette": NDVI_PALETTE})
+    return {
+        "true_color": true_color["tile_fetcher"].url_format,
+        "ndvi": ndvi["tile_fetcher"].url_format,
+        "start_date": start,
+        "end_date": today.isoformat(),
+        "image_count": count,
+    }
+
+
+def _get_satellite(point, start_date, end_date):
     collection = (
         ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
         .filterBounds(point)
         .filterDate(start_date, end_date)
         .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 50))
-        .map(mask_clouds)
+        .map(_mask_s2_clouds)
         .sort("system:time_start", False)
         .limit(5)
     )
@@ -174,16 +211,44 @@ def _get_terrain(point):
     }
 
 
+def season_start(today, sown):
+    """Sowing date when the season is under way and recent enough to fetch, else None."""
+    if sown is None or sown > today or (today - sown).days > MAX_SEASON_DAYS:
+        return None
+    return sown
+
+
+def evaluate_season(today, sown, weather_series, soil, satellite):
+    """The rules for the configured season on the Earth Engine data."""
+    start = season_start(today, sown)
+    season_weather = [item for item in weather_series
+                      if start is not None and (item.get("date") or "") >= start.isoformat()]
+    return evaluate_rules({
+        "as_of": today.isoformat(),
+        "planting_date": sown.isoformat() if sown else None,
+        "weather": {"series": season_weather},
+        "soil": soil,
+        "satellite": satellite or [],
+        "simulated": False,
+    })
+
+
 def get_monitor_data(days):
     _initialize_earth_engine()
     today = datetime.now(timezone.utc).date()
-    start_date = (today - timedelta(days=days)).isoformat()
+    window_start = today - timedelta(days=days)
+    sown = planting_date()
+    start = season_start(today, sown)
+    fetch_start = min(window_start, start) if start else window_start
     end_date = today.isoformat()
     point = ee.Geometry.Point([LONGITUDE, LATITUDE])
 
-    weather = _get_weather(point, start_date, end_date)
+    # One query covers both the chart window and the season the rules need.
+    all_weather = _get_weather(point, fetch_start.isoformat(), end_date)
+    weather = [item for item in all_weather if (item.get("date") or "") >= window_start.isoformat()]
     if not weather:
         raise RuntimeError("ERA5-Land returned no daily weather observations.")
+    start_date = window_start.isoformat()
 
     errors = {}
     optional_data = {}
@@ -191,6 +256,7 @@ def get_monitor_data(days):
         ("satellite", lambda: _get_satellite(point, start_date, end_date)),
         ("soil", lambda: _get_soil(point)),
         ("terrain", lambda: _get_terrain(point)),
+        ("map_layers", lambda: _get_map_layers(point, today)),
     ):
         try:
             optional_data[name] = fetch()
@@ -199,12 +265,21 @@ def get_monitor_data(days):
             optional_data[name] = None
             errors[name] = "This Earth Engine dataset could not be loaded."
 
+    try:
+        rules = evaluate_season(today, sown, all_weather, optional_data.get("soil"),
+                                optional_data.get("satellite"))
+    except Exception:
+        logger.exception("Sesame rule evaluation failed")
+        rules = None
+        errors["rules"] = "The crop rules could not be evaluated."
+
     return {
         "source": "Google Earth Engine",
-        "farm": {"id": FARM_ID, "latitude": LATITUDE, "longitude": LONGITUDE},
+        "farm": farm_summary(),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "weather": {"series": weather, "latest": weather[-1]},
         **optional_data,
+        "rules": rules,
         "errors": errors,
     }
 
