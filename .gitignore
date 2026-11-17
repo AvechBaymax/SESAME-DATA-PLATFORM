@@ -61,3 +61,9 @@ Thumbs.db
 !jobs/.gitkeep
 !plugins/.gitkeep
  
+
+# ---------- Claude Code skills ----------
+# The ui-ux-pro-max skill ships its search data as CSV/JSON under data/;
+# the data/ and *.csv rules above are for local datasets, not for this.
+!.claude/skills/ui-ux-pro-max/data/
+!.claude/skills/ui-ux-pro-max/data/**
