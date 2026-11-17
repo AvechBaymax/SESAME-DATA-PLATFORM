@@ -54,7 +54,37 @@
     flask: '<svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3"/><path d="M7 15h10"/></svg>',
     box: '<svg viewBox="0 0 24 24"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z"/><path d="m4.3 7.7 7.7 4.4 7.7-4.4M12 12v9"/></svg>',
     check: '<svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg>',
+    bottle: '<svg viewBox="0 0 24 24"><path d="M10 2h4v3l2 3v12a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2V8l2-3V2Z"/><path d="M8 12h8"/></svg>',
+    sparkle: '<svg viewBox="0 0 24 24"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"/><path d="M19 17v4m-2-2h4"/></svg>',
+    grain: '<svg viewBox="0 0 24 24"><path d="M12 21V8"/><path d="M12 8c-2.5 0-4-1.5-4-4 2.5 0 4 1.5 4 4Zm0 0c2.5 0 4-1.5 4-4-2.5 0-4 1.5-4 4Zm0 6c-2.5 0-4-1.5-4-4 2.5 0 4 1.5 4 4Zm0 0c2.5 0 4-1.5 4-4-2.5 0-4 1.5-4 4Z"/></svg>',
+    shaker: '<svg viewBox="0 0 24 24"><path d="M8 10h8l-1 11H9L8 10Z"/><path d="M9 10V7a3 3 0 0 1 6 0v3"/><path d="M11 4.5h.01M13 4.5h.01M12 3h.01"/></svg>',
+    jar: '<svg viewBox="0 0 24 24"><path d="M7 3h10v3H7z"/><path d="M6 6h12v13a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6Z"/><path d="M9 12h6"/></svg>',
+    flame: '<svg viewBox="0 0 24 24"><path d="M12 3c1 3 5 5 5 10a5 5 0 0 1-10 0c0-3 2-4 2-7 1.5 1 3 2.5 3 4 0-3-1-5 0-7Z"/></svg>',
   };
+  // Icons are decorative: the text next to them carries the meaning.
+  Object.keys(icon).forEach((key) => { icon[key] = icon[key].replace("<svg ", '<svg aria-hidden="true" focusable="false" '); });
+
+  const fmtTime = (date) => date.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  const STATUS_DASH = { stable: null, watch: "8 5", risk: "2 5", nodata: "1 7" };
+
+  // One polite status region: background loads are announced as a full sentence, focus stays put.
+  function announce(message) {
+    const region = document.querySelector("#live-status");
+    if (region) region.textContent = message;
+  }
+
+  function dataNote() {
+    const mock = D.FARMS.length;
+    const real = state.realFarm;
+    let realText = "ruộng thật đang tải từ Earth Engine";
+    if (real?.monitor) {
+      const latest = real.monitor.weather?.latest?.date;
+      realText = `${real.code} là dữ liệu thật (Earth Engine${latest ? `, ERA5-Land đến ${latest.split("-").reverse().join("/")}` : ""})`;
+    } else if (real?.error) {
+      realText = `không kết nối được dữ liệu thật của ${real.code}`;
+    }
+    return `${mock} nông trại là <strong>dữ liệu mô phỏng</strong> để trình diễn; ${esc(realText)}.`;
+  }
 
   let toastTimer;
   function toast(message) {
@@ -151,8 +181,10 @@
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
       state.realFarm = buildRealFarm(payload, null);
+      announce(`Đã tải dữ liệu thật của ${state.realFarm.name} từ Earth Engine.`);
     } catch (error) {
       state.realFarm = buildRealFarm(null, error.message);
+      announce(`Không tải được dữ liệu thật của ruộng ${state.realFarm.code}.`);
     }
     rerender();
   }
@@ -176,6 +208,8 @@
       const payload = await response.json();
       const list = Array.isArray(payload) ? payload : [payload];
       state.weather = Object.fromEntries(provinces.map((p, index) => [p.id, list[index]]));
+      state.weatherAt = new Date();
+      announce(`Đã cập nhật thời tiết ${provinces.length} vùng trồng.`);
     } catch {
       state.weatherError = true;
     }
@@ -217,16 +251,25 @@
     const map = L.map(element, { scrollWheelZoom: false, ...options });
     map.on("click", () => map.scrollWheelZoom.enable());
     map.on("mouseout", () => map.scrollWheelZoom.disable());
+    // Redraw when the container changes size (web fonts, breakpoints, sidebars),
+    // otherwise Leaflet leaves grey, untiled areas.
+    if (window.ResizeObserver) {
+      const observer = new ResizeObserver(() => map.invalidateSize({ pan: false }));
+      observer.observe(element);
+      map.on("unload", () => observer.disconnect());
+    }
     state.maps.push(map);
     return map;
   }
 
   function farmMarker(farm) {
     const color = D.STATUS[farm.status].color;
-    const classes = ["farm-marker", farm.flagship ? "flagship" : "", farm.real ? "real" : ""].join(" ");
+    // Shape as well as colour tells the status apart (circle, diamond, triangle, hollow).
+    const classes = ["farm-marker", farm.status, farm.flagship ? "flagship" : "", farm.real ? "real" : ""].join(" ");
     return L.marker([farm.lat, farm.lon], {
       icon: L.divIcon({ className: "", html: `<div class="${classes}" style="color:${color}"><i style="background:${color}"></i></div>`, iconSize: [16, 16], iconAnchor: [8, 8] }),
-      title: farm.name,
+      title: `${farm.name} – ${D.STATUS[farm.status].name}`,
+  alt: `${farm.name} – ${D.STATUS[farm.status].name}`,
     }).bindPopup(`<div class="popup-title">${esc(farm.name)}</div>
       <div class="popup-meta">${esc(farm.code)} · ${esc(farm.provinceName)}<br>${num(farm.area, 1)} ha · dự báo ${num(farm.forecast, farm.real ? 1 : 0)} t</div>
       ${statusPill(farm.status)}<br><br><a class="popup-link" href="/farm/${esc(farm.id)}" data-link>Xem chi tiết →</a>`);
@@ -236,7 +279,8 @@
     const control = L.control({ position });
     control.onAdd = () => {
       const div = L.DomUtil.create("div", "map-legend");
-      div.innerHTML = Object.values(D.STATUS).map((s) => `<div><span class="dot" style="background:${s.color}"></span>${s.name}</div>`).join("");
+      div.innerHTML = Object.entries(D.STATUS).map(([id, s]) =>
+        `<div><span class="farm-marker mini ${id}" style="color:${s.color}" aria-hidden="true"><i style="background:${s.color}"></i></span>${s.name}</div>`).join("");
       return div;
     };
     return control;
@@ -276,7 +320,7 @@
   }
 
   function chip(label, active, attrs) {
-    return `<button type="button" class="chip${active ? " active" : ""}" ${attrs}>${label}</button>`;
+    return `<button type="button" class="chip${active ? " active" : ""}" aria-pressed="${active}" ${attrs}>${label}</button>`;
   }
 
   function renderOverview() {
@@ -285,7 +329,7 @@
     const s = overviewStats(farms);
     const { variety, program, region } = state.filters;
     const regions = D.PROVINCES.filter((p) => farms.some((f) => f.provinceId === p.id));
-    const stageColors = ["#c9dbb7", "#a5c28d", "#486d35", "#d4a24c", "#a87318"];
+    const stageColors = ["#cfe5f8", "#8cc2ec", "#1488d8", "#0a2c8f", "#d4a24c"];
     const stageTotal = s.stages.reduce((a, b) => a + b, 0) || 1;
     const rangeSpan = Math.max(1, s.range[1] - s.range[0]);
     const span = { min: s.range[0] * 0.97, max: s.range[1] * 1.03 };
@@ -293,6 +337,7 @@
 
     app.innerHTML = `
       <h1 class="page-title">Tổng quan vùng trồng mè</h1>
+      <p class="data-note">${dataNote()}</p>
       <div class="filters" role="group" aria-label="Bộ lọc">
         <span class="kicker">Giống</span>
         ${chip("Tất cả", variety === "all" && !program, 'data-variety="all"')}
@@ -333,7 +378,7 @@
               ${regions.map((p) => chip(esc(p.name), region === p.id, `data-region="${p.id}"`)).join("")}
             </div>
           </div>
-          <div class="map" id="region-map"></div>
+          <div class="map" id="region-map" role="region" aria-label="Bản đồ các nông trại trong vùng"></div>
         </article>
         <div class="stack">
           <article class="card supply-card">
@@ -360,11 +405,11 @@
       <section class="grid-lower">
         <article class="card card-pad">
           <h2 class="card-title" style="margin-bottom:14px">Phân bố giai đoạn vụ mùa</h2>
-          <div class="stage-bar">${s.stages.map((count, i) => `<span style="width:${(count / stageTotal) * 100}%;background:${stageColors[i]}"></span>`).join("")}</div>
+          <div class="stage-bar">${s.stages.map((count, i) => `<span style="width:${(count / stageTotal) * 100}%;background:${stageColors[i]}" title="${D.STAGES[i].name}: ${count} ô"></span>`).join("")}</div>
           <div class="stage-counts">${D.STAGES.map((stage, i) => `<div><strong>${s.stages[i]}</strong>${stage.name}</div>`).join("")}</div>
         </article>
         <section>
-          <h2 class="section-title">Khí tượng và thủy văn các vùng trồng</h2>
+          <h2 class="section-title">Khí tượng và thủy văn các vùng trồng <span class="muted-inline">${state.weatherAt ? `Open-Meteo · cập nhật ${fmtTime(state.weatherAt)}` : ""}</span></h2>
           <div class="weather-grid">${renderWeatherCards()}</div>
         </section>
       </section>
@@ -376,7 +421,7 @@
             <thead><tr><th>Nông trại</th><th>Vùng</th><th class="num">Diện tích</th><th class="num">Ô</th><th class="num">Dự báo</th><th class="num">Thu hoạch</th><th class="num">Nhật ký</th><th>Trạng thái</th></tr></thead>
             <tbody>${regionFarms.map((farm) => `
               <tr data-href="/farm/${esc(farm.id)}">
-                <td><div class="farm-name"><strong>${esc(farm.name)}${farm.flagship ? '<span class="badge badge-gold">Trọng điểm</span>' : ""}${farm.real ? '<span class="badge badge-real">Dữ liệu thật</span>' : ""}</strong><span>${esc(farm.code)}</span></div></td>
+                <td><div class="farm-name"><strong><a href="/farm/${esc(farm.id)}" data-link>${esc(farm.name)}</a>${farm.flagship ? '<span class="badge badge-gold">Trọng điểm</span>' : ""}${farm.real ? '<span class="badge badge-real">Dữ liệu thật</span>' : ""}</strong><span>${esc(farm.code)}</span></div></td>
                 <td>${esc(farm.district)}, ${esc(farm.provinceName)}</td>
                 <td class="num">${num(farm.area, 1)} ha</td>
                 <td class="num">${farm.blocks.length}</td>
@@ -465,12 +510,12 @@
       <a class="back-link" href="/" data-link>${icon.back} Tổng quan vùng trồng</a>
       <div class="farm-header">
         <div>
-          <h1>${esc(farm.name)} ${statusPill(farm.status, farm.real && farm.status === "nodata" ? (farm.error ? "Mất kết nối" : "Đang tải") : null)}${farm.real ? '<span class="badge badge-real">Dữ liệu thật</span>' : ""}</h1>
+          <h1>${esc(farm.name)} ${statusPill(farm.status, farm.real && farm.status === "nodata" ? (farm.error ? "Mất kết nối" : "Đang tải") : null)}${farm.real ? '<span class="badge badge-real">Dữ liệu thật</span>' : '<span class="badge badge-sim">Mô phỏng</span>'}</h1>
           <p>${esc(farm.code)}, ${esc(farm.commune)}, ${esc(farm.district)}, ${esc(farm.provinceName)}</p>
         </div>
         <div class="segmented" role="group" aria-label="Kiểu bản đồ">
-          <button type="button" class="active" data-basemap="imagery">${icon.satellite} Ảnh vệ tinh</button>
-          <button type="button" data-basemap="voyager">${icon.map} Bản đồ</button>
+          <button type="button" class="active" aria-pressed="true" data-basemap="imagery">${icon.satellite} Ảnh vệ tinh</button>
+          <button type="button" aria-pressed="false" data-basemap="voyager">${icon.map} Bản đồ</button>
         </div>
       </div>
 
@@ -480,7 +525,7 @@
         <article class="card kpi"><div class="kpi-label">Đủ nhật ký</div><div class="kpi-value">${Number.isFinite(farm.log) ? `${farm.log}%` : "—"}</div></article>
         <article class="card kpi"><div class="kpi-label">Cửa sổ thu hoạch</div><div class="kpi-value compact" style="font-size:18px">${fmtDate(farm.harvestStart)} →<br><small style="margin:0;color:var(--ink);font-size:13px">${fmtDate(farm.harvestEnd)}</small></div></article>
         ${score ? `<article class="card kpi score-card"><div class="kpi-label">Điểm trang trại</div><div class="kpi-value">${score.score}</div>
-          <div class="score-meta"><span>🔥 ${farm.streakDays} ngày</span><b>CẤP ${score.level}</b></div></article>`
+          <div class="score-meta"><span>${icon.flame}${farm.streakDays} ngày liên tiếp</span><b>CẤP ${score.level}</b></div></article>`
           : `<article class="card kpi score-card"><div class="kpi-label">Quy tắc canh tác</div><div class="kpi-value" style="font-size:20px">${esc(farm.monitor?.rules ? RULE_TEXT[farm.monitor.rules.overall_status] : "—")}</div>
           <div class="score-meta"><span>${esc(farm.monitor?.rules?.stage_label || "")}</span><b>${farm.monitor?.rules?.das != null ? `NGÀY ${farm.monitor.rules.das}` : ""}</b></div></article>`}
       </section>
@@ -488,7 +533,7 @@
       <section class="grid-main">
         <article class="card card-pad">
           <div class="card-head"><h2 class="card-title">Bản đồ nông trại</h2>${farm.real ? '<span class="muted" style="font-size:12px">Ranh giới ' + (farm.monitor?.farm?.boundary_source === "configured" ? "đã cấu hình" : "ước tính (nét đứt)") + "</span>" : ""}</div>
-          <div class="map map-farm" id="farm-map"></div>
+          <div class="map map-farm" id="farm-map" role="region" aria-label="Bản đồ vệ tinh nông trại và các ô canh tác"></div>
         </article>
         <div class="stack">
           <article class="card card-pad">
@@ -519,7 +564,7 @@
         <div class="block-grid">${blocks.map((b) => {
           const color = D.STATUS[b.status].color;
           return `<a class="block-card" href="/farm/${esc(farm.id)}/block/${b.id}" data-link>
-            <div class="block-card-top">Ô ${b.id}<span class="dot" style="background:${color}"></span></div>
+            <div class="block-card-top">Ô ${b.id}<span class="dot" style="background:${color}" title="${D.STATUS[b.status].name}"></span><span class="sr-only">, ${D.STATUS[b.status].name}</span></div>
             <small>${esc(b.variety)}</small>
             <div class="progress"><span style="width:${b.gddPct}%;background:${color}"></span></div>
             <div class="block-card-foot"><span>${num(b.forecast, 1)} t</span><span>${Number.isFinite(b.moisture) ? `ẩm ${b.moisture}%` : (b.stage ? b.stage.name : "Chưa gieo")}</span><span>${b.gddPct}% GDD</span></div>
@@ -566,11 +611,18 @@
       blockLayer.clearLayers();
       farm.blocks.forEach((b) => {
         const color = farm.real ? "#ffe066" : MAP_MODES[mode].color(b);
+        const dash = farm.real
+          ? (farm.monitor?.farm?.boundary_source !== "configured" ? "6 5" : null)
+          : (mode === "status" ? STATUS_DASH[b.status] : null);
         L.polygon(b.polygon, {
-          color, weight: 2, fillColor: color, fillOpacity: farm.real ? 0.08 : 0.32,
-          dashArray: farm.real && farm.monitor?.farm?.boundary_source !== "configured" ? "6 5" : null,
-        }).bindTooltip(`Ô ${b.id}`, { permanent: farm.blocks.length <= 30, direction: "center", className: "block-label" })
+          color, weight: mode === "status" && b.status !== "stable" ? 3 : 2, fillColor: color,
+          fillOpacity: farm.real ? 0.08 : 0.32, dashArray: dash,
+        }).bindTooltip(`Ô ${b.id}`, {
+          // Permanent labels only when there is room for them; otherwise on hover/tap.
+          permanent: farm.blocks.length <= 30 && map.getSize().x >= 600, direction: "center", className: "block-label" })
           .on("click", () => navigate(`/farm/${farm.id}/block/${b.id}`))
+          .on("mouseover", (event) => event.target.setTooltipContent(`Ô ${b.id} · ${D.STATUS[b.status].name}`))
+          .on("mouseout", (event) => event.target.setTooltipContent(`Ô ${b.id}`))
           .addTo(blockLayer);
       });
     };
@@ -592,22 +644,31 @@
       const modes = L.control({ position: "topright" });
       modes.onAdd = () => {
         const div = L.DomUtil.create("div", "map-modes");
-        div.innerHTML = Object.entries(MAP_MODES).map(([id, m]) => `<button type="button" data-mode="${id}" class="${id === mode ? "active" : ""}">${m.name}</button>`).join("");
+        div.innerHTML = Object.entries(MAP_MODES).map(([id, m]) => `<button type="button" data-mode="${id}" class="${id === mode ? "active" : ""}" aria-pressed="${id === mode}">${m.name}</button>`).join("");
         L.DomEvent.disableClickPropagation(div);
         div.addEventListener("click", (event) => {
           const button = event.target.closest("button[data-mode]");
           if (!button) return;
           mode = button.dataset.mode;
-          div.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === button));
+          div.querySelectorAll("button").forEach((b) => { b.classList.toggle("active", b === button); b.setAttribute("aria-pressed", String(b === button)); });
           drawBlocks();
         });
         return div;
       };
       modes.addTo(map);
+      // Status legend: colour plus outline pattern, so the map does not rely on colour alone.
+      const legend = L.control({ position: "bottomleft" });
+      legend.onAdd = () => {
+        const div = L.DomUtil.create("div", "map-legend");
+        div.innerHTML = Object.entries(D.STATUS).map(([id, st]) => `<div><svg width="26" height="10" aria-hidden="true">
+          <line x1="1" y1="5" x2="25" y2="5" stroke="${st.color}" stroke-width="3" ${STATUS_DASH[id] ? `stroke-dasharray="${STATUS_DASH[id]}"` : ""}/></svg>${st.name}</div>`).join("");
+        return div;
+      };
+      legend.addTo(map);
     }
     L.control.scale({ imperial: false }).addTo(map);
     document.querySelectorAll("[data-basemap]").forEach((button) => button.addEventListener("click", () => {
-      document.querySelectorAll("[data-basemap]").forEach((b) => b.classList.toggle("active", b === button));
+      document.querySelectorAll("[data-basemap]").forEach((b) => { b.classList.toggle("active", b === button); b.setAttribute("aria-pressed", String(b === button)); });
       Object.values(bases).forEach((layer) => layer.remove());
       bases[button.dataset.basemap].addTo(map);
       bases[button.dataset.basemap].bringToBack();
@@ -692,7 +753,7 @@
         <article class="card kpi"><div class="kpi-label">Đủ nhật ký</div><div class="kpi-value">${Number.isFinite(block.log) ? `${block.log}%` : "—"}</div></article>
       </section>
       <section class="grid-main">
-        <article class="card card-pad"><h2 class="card-title" style="margin-bottom:12px">Vị trí ô</h2><div class="map map-block" id="block-map"></div></article>
+        <article class="card card-pad"><h2 class="card-title" style="margin-bottom:12px">Vị trí ô</h2><div class="map map-block" id="block-map" role="region" aria-label="Vị trí ô trên ảnh vệ tinh"></div></article>
         <article class="card card-pad">
           <h2 class="card-title" style="margin-bottom:4px">${farm.real ? "Mưa theo ngày (ERA5-Land)" : "Độ ẩm đất 30 ngày"}</h2>
           <p class="muted" style="font-size:11px;margin-bottom:6px">${farm.real ? "Ước tính vệ tinh/tái phân tích, 30 ngày gần nhất" : "Cảm biến TEROS 12 · độ sâu 15 cm"}</p>
@@ -718,21 +779,25 @@
     }
   }
 
-  function lineChart(values, { min, max, unit, bars = false, labels = [] }) {
-    const w = 600, h = 180, left = 34, right = 8, top = 10, bottom = 22;
+  function lineChart(values, { min, max, unit, bars = false, labels = [], title = "" }) {
+    // Charts are images to screen readers, with a one-line summary; every point/bar has a tooltip.
+    const finite = values.filter(Number.isFinite);
+    const summary = `${title}: ${labels[0] || ""} – ${labels.at(-1) || ""}, thấp nhất ${num(Math.min(...finite), 1)}${unit}, cao nhất ${num(Math.max(...finite), 1)}${unit}`;
+    // Drawn at about the panel's real width (~360 px) so axis text renders at its CSS size.
+    const w = 360, h = 180, left = 34, right = 8, top = 10, bottom = 22;
     const x = (i) => left + ((w - left - right) * i) / Math.max(1, values.length - 1);
     const y = (v) => top + (1 - (v - min) / (max - min)) * (h - top - bottom);
     const ticks = [min, (min + max) / 2, max];
     const grid = ticks.map((t) => `<line class="grid" x1="${left}" x2="${w - right}" y1="${y(t)}" y2="${y(t)}"/><text class="axis" x="0" y="${y(t) + 3}">${num(t)}${unit}</text>`).join("");
-    const xl = labels.map((label, i) => (i % Math.ceil(labels.length / 6) === 0 ? `<text class="axis" x="${x(i)}" y="${h - 4}" text-anchor="middle">${esc(label)}</text>` : "")).join("");
+    const xl = labels.map((label, i) => (i % Math.ceil(labels.length / 4) === 0 ? `<text class="axis" x="${x(i)}" y="${h - 4}" text-anchor="middle">${esc(label)}</text>` : "")).join("");
     if (bars) {
       const bw = ((w - left - right) / values.length) * 0.6;
-      return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${grid}${values.map((v, i) => `<rect x="${x(i) - bw / 2}" y="${y(v || 0)}" width="${bw}" height="${y(min) - y(v || 0)}" rx="2" fill="#9cbfd1"><title>${num(v, 1)} ${unit}</title></rect>`).join("")}${xl}</svg>`;
+      return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(summary)}">${grid}${values.map((v, i) => `<rect x="${x(i) - bw / 2}" y="${y(v || 0)}" width="${bw}" height="${y(min) - y(v || 0)}" rx="2" fill="#4d9fe0"><title>${esc(labels[i] || "")}: ${num(v, 1)} ${unit}</title></rect>`).join("")}${xl}</svg>`;
     }
     const path = values.map((v, i) => `${i ? "L" : "M"}${x(i)} ${y(v)}`).join(" ");
-    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${grid}
-      <path d="${path} L${x(values.length - 1)} ${y(min)} L${x(0)} ${y(min)} Z" fill="#486d35" opacity=".1"/>
-      <path d="${path}" fill="none" stroke="#486d35" stroke-width="2"/>${xl}</svg>`;
+    return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(summary)}">${grid}
+      <path d="${path} L${x(values.length - 1)} ${y(min)} L${x(0)} ${y(min)} Z" fill="#1488d8" opacity=".12"/>
+      <path d="${path}" fill="none" stroke="#0a2c8f" stroke-width="2"/>${values.map((v, i) => `<circle class="point" cx="${x(i)}" cy="${y(v)}" r="2.5"><title>${esc(labels[i] || "")}: ${num(v, 1)}${unit}</title></circle>`).join("")}${xl}</svg>`;
   }
 
   function moistureChart(farm, block) {
@@ -746,7 +811,7 @@
       return value;
     }).reverse();
     const labels = values.map((_, i) => fmtDate(addDays(D.TODAY, i - 29)).slice(0, 5));
-    return lineChart(values, { min: 20, max: 60, unit: "%", labels });
+    return lineChart(values, { min: 20, max: 60, unit: "%", labels, title: "Độ ẩm đất 30 ngày" });
   }
   const between = (rand, a, b) => a + rand() * (b - a);
 
@@ -754,7 +819,7 @@
     const series = farm.monitor?.weather?.series || [];
     if (!series.length) return '<p class="empty">Chưa có dữ liệu.</p>';
     const values = series.map((d) => d.rainfall_mm || 0);
-    return lineChart(values, { min: 0, max: Math.max(10, ...values), unit: "mm", bars: true, labels: series.map((d) => d.date.slice(8, 10) + "/" + d.date.slice(5, 7)) });
+    return lineChart(values, { min: 0, max: Math.max(10, ...values), unit: "mm", bars: true, title: "Mưa theo ngày (ERA5-Land)", labels: series.map((d) => d.date.slice(8, 10) + "/" + d.date.slice(5, 7)) });
   }
 
   // ---- products --------------------------------------------------------------------------
@@ -768,14 +833,14 @@
       <h1 class="page-title">Sản phẩm &amp; Lineage</h1>
       <p class="page-subtitle">Truy xuất nguồn gốc từ giống mè đến sản phẩm — <strong>${D.PRODUCTS.length} batch, ${num(units)} đơn vị</strong></p>
       <section class="count-cards">
-        ${countCard(icon.leaf, "#f0f5ea", "#486d35", D.HARVEST_BATCHES.length, "Harvest Batches")}
+        ${countCard(icon.leaf, "#eaf6ec", "#2f8a3a", D.HARVEST_BATCHES.length, "Harvest Batches")}
         ${countCard(icon.factory, "#f4efe6", "#7c6544", D.FACTORY_INTAKES.length, "Factory Intakes")}
         ${countCard(icon.flask, "#fbeee9", "#a0522d", D.PROCESSING_BATCHES.length, "Processing Batches")}
-        ${countCard(icon.box, "#eaf1fa", "#2f6db5", D.PRODUCTS.length, "Product Batches")}
+        ${countCard(icon.box, "#e6f0fb", "#0a2c8f", D.PRODUCTS.length, "Product Batches")}
       </section>
       <div class="filters">
-        <button type="button" class="chip chip-lg${category === "all" ? " active" : ""}" data-category="all">Tất cả sản phẩm <span class="count">${D.PRODUCTS.length}</span></button>
-        ${D.CATEGORIES.map((c) => `<button type="button" class="chip chip-lg${category === c.id ? " active" : ""}" data-category="${c.id}">${c.icon} ${esc(c.name)} <span class="count">${D.PRODUCTS.filter((p) => p.category === c.id).length}</span></button>`).join("")}
+        <button type="button" class="chip chip-lg${category === "all" ? " active" : ""}" data-category="all" aria-pressed="${category === "all"}">Tất cả sản phẩm <span class="count">${D.PRODUCTS.length}</span></button>
+        ${D.CATEGORIES.map((c) => `<button type="button" class="chip chip-lg${category === c.id ? " active" : ""}" data-category="${c.id}" aria-pressed="${category === c.id}">${icon[c.icon]} ${esc(c.name)} <span class="count">${D.PRODUCTS.filter((p) => p.category === c.id).length}</span></button>`).join("")}
       </div>
       <section class="product-grid">${products.map(productCard).join("")}</section>`;
   }
@@ -790,10 +855,10 @@
     const process = byId(D.PROCESSING_BATCHES, p.process);
     return `<article class="card product-card">
       <div class="product-main">
-        <span class="product-icon ${p.category}">${p.icon}</span>
+        <span class="product-icon ${p.category}">${icon[p.icon] || icon.box}</span>
         <div>
           <div class="product-tags"><span class="badge badge-real">${esc(category.name)}</span>${esc(p.sku)}</div>
-          <h3>${esc(p.name)}</h3>
+          <h2 class="product-name">${esc(p.name)}</h2>
           <p>${esc(p.description)}</p>
         </div>
       </div>
@@ -868,7 +933,7 @@
           <dl><dt>Số lượng</dt><dd>${esc(p.quantity)}</dd><dt>Đóng gói</dt><dd>${esc(p.packaging)}</dd><dt>Giá</dt><dd>${esc(p.price)} ${esc(p.unit)}</dd></dl></article>
       </section>
       <section class="grid-main">
-        <article class="card card-pad"><h2 class="card-title" style="margin-bottom:12px">Nông trại nguồn</h2><div class="map map-farm" id="trace-map"></div></article>
+        <article class="card card-pad"><h2 class="card-title" style="margin-bottom:12px">Nông trại nguồn</h2><div class="map map-farm" id="trace-map" role="region" aria-label="Bản đồ nông trại nguồn"></div></article>
         <article class="card card-pad">
           <h2 class="card-title" style="margin-bottom:6px">Danh sách nông trại</h2>
           <ul class="task-list">${farms.map((f) => `<li class="task-item"><a href="/farm/${esc(f.id)}" data-link><strong>${esc(f.name)}</strong></a>${statusPill(f.status)}<span>${esc(f.code)} · ${esc(f.district)}, ${esc(f.provinceName)} · ${num(f.area, 1)} ha</span></li>`).join("")}</ul>
@@ -927,9 +992,18 @@
     state.maps.forEach((map) => map.remove());
     state.maps = [];
     const route = currentRoute();
-    document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.tab === route.tab));
+    document.querySelectorAll(".tab").forEach((tab) => {
+      const active = tab.dataset.tab === route.tab;
+      tab.classList.toggle("active", active);
+      if (active) tab.setAttribute("aria-current", "page"); else tab.removeAttribute("aria-current");
+    });
     route.render(route.params);
-    if (scroll) window.scrollTo(0, 0);
+    const heading = app.querySelector("h1")?.textContent.trim();
+    document.title = heading ? `${heading} · OpenSesame` : "OpenSesame — Production Digital Twin cho vùng trồng mè";
+    if (scroll) {
+      window.scrollTo(0, 0);
+      app.focus({ preventScroll: true }); // screen readers start reading the new page
+    }
   }
 
   function navigate(href) {

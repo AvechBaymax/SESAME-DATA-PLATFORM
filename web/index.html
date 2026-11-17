@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#faf9f3" />
+    <meta name="theme-color" content="#0a2c8f" />
     <meta name="description" content="OpenSesame — Production Digital Twin cho vùng trồng mè. Quản lý vùng trồng, dự báo sản lượng và truy xuất nguồn gốc." />
     <title>OpenSesame — Production Digital Twin cho vùng trồng mè</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231e4b1c'/%3E%3Cpath d='M16 25v-9m0 4c-4 0-6.5-2.5-6.5-6.5 4 0 6.5 2.5 6.5 6.5Zm0-3c0-4 2.5-6.5 6.5-6.5 0 4-2.5 6.5-6.5 6.5Z' fill='none' stroke='white' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="icon" type="image/png" href="/assets/logo-bk.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -18,12 +18,14 @@
     <script src="/app.js" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#app">Bỏ qua tới nội dung chính</a>
     <header class="topbar">
       <a class="brand" href="/" data-link aria-label="OpenSesame — Tổng quan">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24"><path d="M12 20v-8m0 3c-3.5 0-5.5-2-5.5-5.5 3.5 0 5.5 2 5.5 5.5Zm0-2.5c0-3.5 2-5.5 5.5-5.5 0 3.5-2 5.5-5.5 5.5Z"/></svg>
+        <img class="brand-logo" src="/assets/logo-bk.png" alt="Trường Đại học Bách Khoa – ĐHQG TP.HCM" width="44" height="44" />
+        <span class="brand-text">
+          <span class="brand-name">Open<span>Sesame</span></span>
+          <span class="brand-sub">ĐH Bách Khoa · ĐHQG-HCM</span>
         </span>
-        <span class="brand-name">Open<span>Sesame</span></span>
       </a>
       <nav class="tabs" aria-label="Điều hướng chính">
         <a class="tab" href="/" data-link data-tab="region">Vùng trồng</a>
@@ -35,6 +37,11 @@
       <span class="topbar-spacer"></span>
     </header>
     <main id="app" class="page" tabindex="-1"><p class="empty">Đang tải…</p></main>
+    <footer class="site-footer">
+      <span class="footer-brand"><img src="/assets/logo-bk.png" alt="" width="34" height="34" /><span><strong>OpenSesame</strong> · Đồ án chuyên ngành, Khoa Khoa học và Kỹ thuật Máy tính</span></span>
+      <span>Trường Đại học Bách Khoa – ĐHQG TP.HCM · HK261, 2026–2027</span>
+    </footer>
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <div id="live-status" class="sr-only" role="status" aria-atomic="true"></div>
   </body>
 </html>
