@@ -1,0 +1,14 @@
+# Vercel serves only web/ (static) and api/ (Python functions, which read config/).
+# Everything else is the data platform (Spark, Airflow, Docker) and is not deployed.
+.venv*/
+venv/
+dags/
+data/
+docs/
+infrastructure/
+logs/
+plugins/
+scripts/
+src/
+tests/
+**/__pycache__/
