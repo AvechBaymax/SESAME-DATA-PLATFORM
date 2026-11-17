@@ -13,6 +13,7 @@ Sinks: kafka (default, key=device_id), stdout, or a .jsonl file.
 
 Usage (run from the repo root after `pip install -e .`):
   python -m mock_iot.producer --mode live --interval 5
+  python -m mock_iot.producer --all-farms --mode backfill --weather nasa --fault-rate 0.02
   python -m mock_iot.producer --mode backfill --planting-date 2025-11-15 \\
       --start 2025-11-10 --days 80 --sink jsonl --output data/sensor_season.jsonl
   python -m mock_iot.producer --mode backfill --start 2025-11-10 --days 80 --weather nasa
@@ -30,7 +31,8 @@ import time
 from datetime import date, datetime, timedelta, timezone
 
 from common.config import get_kafka_broker, get_sensor_topic
-from common.farm import add_farm_args, farm_from_args
+from common.crop import season_length
+from common.farm import DEMO_FARMS, add_farm_args, farm_from_args
 from mock_iot.simulator import SensorNode
 from mock_iot.weather import ClimatologyWeather, DiurnalWeather, NasaPowerWeather
 
@@ -185,7 +187,11 @@ def parse_args(argv=None):
     ap.add_argument("--interval", type=float, default=5.0, help="live: seconds between messages")
     ap.add_argument("--start", type=date.fromisoformat, default=None,
                     help="backfill: first day YYYY-MM-DD (default: planting date - 5 days)")
-    ap.add_argument("--days", type=int, default=85, help="backfill: number of days")
+    ap.add_argument("--days", type=int, default=None,
+                    help="backfill: number of days (default: until 5 days after the last harvest)")
+    ap.add_argument("--all-farms", action="store_true",
+                    help="simulate every device of every farm in common.farm.DEMO_FARMS "
+                         "(ignores the farm flags)")
     ap.add_argument("--step-minutes", type=int, default=15, help="backfill: sample interval")
     ap.add_argument("--weather", choices=["climatology", "nasa"], default="climatology",
                     help="daily drivers: Binh Thuan climatology or NASA POWER (past dates only)")
@@ -196,8 +202,11 @@ def parse_args(argv=None):
     ap.add_argument("--broker", default=None, help="default: $KAFKA_BROKER or localhost:9092")
     ap.add_argument("--topic", default=None, help="default: $KAFKA_TOPIC_SENSOR_RAW or sesame.sensor.raw")
     args = ap.parse_args(argv)
+    plantings = [f.planting_date for f in DEMO_FARMS] if args.all_farms else [args.planting_date]
     if args.start is None:
-        args.start = args.planting_date - timedelta(days=5)
+        args.start = min(plantings) - timedelta(days=5)
+    if args.days is None:
+        args.days = (max(plantings) + timedelta(days=season_length() + 5) - args.start).days
     if not 0 <= args.fault_rate <= 1:
         ap.error("--fault-rate must be between 0 and 1")
     args.broker = get_kafka_broker(args.broker)
@@ -207,9 +216,10 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
-    farm = farm_from_args(args)
+    farms = DEMO_FARMS if args.all_farms else [farm_from_args(args)]
     rng = random.Random(f"{args.seed}:faults")
-    nodes = build_nodes(farm, args)
+    nodes = [node for farm in farms for node in build_nodes(farm, args)]
+    print(f"Simulating {len(nodes)} device(s) on {len(farms)} farm(s)", file=sys.stderr)
     sink = make_sink(args)
     try:
         if args.mode == "backfill":

@@ -6,9 +6,7 @@ iceberg-spark-runtime-3.5_2.12-<version>.jar to run it.
 import json
 import os
 import shutil
-import sys
 from datetime import date, datetime
-from pathlib import Path
 
 import pytest
 
@@ -22,31 +20,7 @@ from lakehouse.silver import TABLES  # noqa: E402
 from lakehouse.spark import create_table_if_missing, merge_into  # noqa: E402
 from mock_iot.mock_api_responses import nasa_payload  # noqa: E402
 
-SRC = str(Path(__file__).resolve().parents[1] / "src")
 ICEBERG_JAR = os.getenv("ICEBERG_SPARK_JAR", "")
-
-
-@pytest.fixture(scope="module")
-def spark(tmp_path_factory):
-    from pyspark.sql import SparkSession
-
-    os.environ["PYSPARK_PYTHON"] = sys.executable  # executors import lakehouse from src/
-    os.environ["PYTHONPATH"] = os.pathsep.join(filter(None, [SRC, os.getenv("PYTHONPATH")]))
-    builder = (SparkSession.builder.master("local[2]").appName("test-silver")
-               .config("spark.sql.session.timeZone", "UTC")
-               .config("spark.sql.shuffle.partitions", "2")
-               .config("spark.ui.enabled", "false"))
-    if ICEBERG_JAR:
-        warehouse = tmp_path_factory.mktemp("warehouse")
-        builder = (builder.config("spark.jars", ICEBERG_JAR)
-                   .config("spark.sql.extensions",
-                           "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
-                   .config("spark.sql.catalog.test", "org.apache.iceberg.spark.SparkCatalog")
-                   .config("spark.sql.catalog.test.type", "hadoop")
-                   .config("spark.sql.catalog.test.warehouse", str(warehouse)))
-    session = builder.getOrCreate()
-    yield session
-    session.stop()
 
 
 def bronze_nasa(spark, files):

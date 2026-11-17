@@ -17,7 +17,8 @@ docker compose --env-file .env -f infrastructure/docker/docker-compose.yml up -d
 ```
 
 The stack: RustFS (object storage), Postgres (Airflow metadata and the Iceberg
-catalog), Kafka, a Spark master and worker, and Airflow.
+catalog), Kafka, a Spark master and worker, the sensor stream
+(`spark-streaming`) and Airflow.
 
 One Dockerfile (`infrastructure/docker/dockerfile`) builds two images that
 share the same extra Spark jars in `/opt/spark/extra-jars`:
@@ -60,6 +61,7 @@ docker exec spark-master /opt/spark/bin/spark-submit \
 | Spark master | http://localhost:8081 |
 | RustFS console | http://localhost:9001 |
 | Kafka (from the host) | localhost:9092 |
+| Sensor stream (Spark UI, Structured Streaming tab) | http://localhost:4040 |
 
 The Postgres user and password (`airflow` / `airflow`) and the Airflow admin
 login are local development defaults; production uses separate secrets.
@@ -192,6 +194,43 @@ structure (marked `"mock": true`) for every demo farm instead:
 python -m mock_iot.mock_api_responses nasa --all-farms --start 20251101 --end 20260315
 python -m mock_iot.mock_api_responses soilgrids --all-farms
 ```
+
+## Sensor stream (PoC)
+
+The `spark-streaming` service runs `src/jobs/sensor_stream.py` from the moment
+the stack starts: Kafka `sesame.sensor.raw` -> `lakehouse.bronze.sensor_raw`
+-> `lakehouse.silver.fact_sensor_reading`, with rejected messages in
+`lakehouse.silver.quarantine_sensor` and unreadable ones also on the topic
+`sesame.sensor.raw.dlq` (see `docs/data-model.md`, sections 6, 8 and 10). It
+takes one of the Spark worker's two cores; the Airflow jobs use the other.
+Build the Silver dimensions first (the bootstrap DAG), so readings can be
+checked against `dim_device`.
+
+Feed it with the simulated sensors of every demo farm, either a whole season
+at once or live readings:
+
+```bash
+# A whole Dong Xuan season (10/11/2025 to 10/03/2026, about 81,000 messages),
+# 2 % of them with injected faults; --weather nasa drives it with NASA POWER
+docker exec airflow-scheduler python -m mock_iot.producer --all-farms --mode backfill \
+    --weather nasa --fault-rate 0.02
+# Live: one reading per device every 5 seconds, stamped now (Ctrl+C stops it)
+docker exec -it airflow-scheduler python -m mock_iot.producer --all-farms --mode live --interval 5
+```
+
+(From the host venv the same commands work with `python -m ...`, using
+`localhost:9092`.) The stream logs one line per micro-batch:
+
+```bash
+docker logs -f spark-streaming 2>&1 | grep sensor_silver
+# [sensor_silver] batch 2: 49999 message(s), 49010 reading(s), 595 quarantined {...}, 407 to DLQ
+docker exec spark-master /opt/spark/bin/spark-sql --master spark://spark-master:7077 -e "
+  SELECT farm_id, count(*), min(ts), max(ts) FROM lakehouse.silver.fact_sensor_reading GROUP BY 1;
+  SELECT mock_fault, dq_rule, count(*) FROM lakehouse.silver.quarantine_sensor GROUP BY 1, 2;" 2>/dev/null
+```
+
+Restarting the service resumes from its checkpoint (volume
+`spark_checkpoints`); a replayed message is not written twice.
 
 ## Sesame farm monitoring dashboard
 

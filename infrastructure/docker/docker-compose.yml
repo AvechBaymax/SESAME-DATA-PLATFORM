@@ -148,6 +148,49 @@ services:
     depends_on:
       - spark-master
 
+  # Sensor stream (src/jobs/sensor_stream.py): Kafka -> bronze.sensor_raw ->
+  # silver.fact_sensor_reading / quarantine_sensor (+ DLQ topic). A long-running
+  # Spark application, so it runs as its own service rather than from Airflow.
+  # It takes 1 of the worker's 2 cores; the Airflow batch jobs use the other.
+  spark-streaming:
+    <<: *spark-common
+    container_name: spark-streaming
+    command:
+      - /opt/spark/bin/spark-submit
+      - --master
+      - spark://spark-master:7077
+      - --conf
+      - spark.cores.max=1
+      - --conf
+      - spark.executor.memory=768m
+      - --driver-memory
+      - 768m
+      - /opt/spark-jobs/sensor_stream.py
+    environment:
+      <<: *spark-env
+      KAFKA_BROKER: kafka:29092
+      SENSOR_CHECKPOINT_DIR: /opt/spark/work-dir/checkpoints
+      # Executors connect back to the driver running in this container
+      SPARK_LOCAL_HOSTNAME: spark-streaming
+    volumes:
+      - ../../src/jobs:/opt/spark-jobs
+      - ../../src:/opt/sesame/src:ro
+      # Streaming checkpoints (Kafka offsets, Bronze snapshots read): keep them
+      # with the data, or the stream starts over from the earliest offset
+      - spark_checkpoints:/opt/spark/work-dir
+    ports:
+      - "4040:4040"   # Spark UI of the stream (Structured Streaming tab)
+    depends_on:
+      spark-worker:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ---------------- Airflow ----------------
   postgres:
     image: postgres:15
@@ -217,3 +260,4 @@ volumes:
   rustfs_data:
   kafka_data:
   postgres_data:
+  spark_checkpoints:

@@ -1,8 +1,7 @@
 # Sesame Data Platform: Data Model
 
-Status: November 2026. Landing, the batch Bronze tables and the batch Silver
-tables (sections 7 and 8, except the sensor tables) are built; the sensor
-stream and Gold are designed here but not yet built.
+Status: November 2026. Landing, Bronze and Silver are built, batch and the
+sensor stream; Gold is designed here but not yet built.
 Stack: RustFS object storage (S3 API), Apache Iceberg tables in a JDBC
 catalog on Postgres, Apache Spark for both batch and Structured Streaming.
 The architecture and flows are drawn in
@@ -95,7 +94,8 @@ grower whether they name a Dong Xuan season by its harvest year instead.
 
 | Table | Partition spec | Why |
 | --- | --- | --- |
-| `bronze.sensor_raw`, `silver.fact_sensor_reading` | `days(ts)` | Most queries read a day or a season of readings |
+| `bronze.sensor_raw` | `days(kafka_ts)` | Arrival day; Bronze does not parse the payload |
+| `silver.fact_sensor_reading` | `days(ts)` | Most queries read a day or a season of readings |
 | `silver.fact_weather_daily`, `gold.feat_season_daily` | `months(date)` | One row per day; months keep files from being too small |
 | `gold.alert_event` | `months(ts)` | Small, read by recent time |
 | Dimensions, `fact_field_operation`, `fact_harvest`, `agg_season_summary` | none | Small tables, updated with `MERGE` |
@@ -157,7 +157,7 @@ Every Bronze table has these metadata columns:
 
 | Table | Grain | Payload columns |
 | --- | --- | --- |
-| `bronze.sensor_raw` | Kafka message | `kafka_key`, `kafka_partition`, `kafka_offset`, `kafka_ts`, `headers` (incl. `x-mock-fault`), `value` (raw JSON string) |
+| `bronze.sensor_raw` | Kafka message | `kafka_key`, `kafka_topic`, `kafka_partition`, `kafka_offset`, `kafka_ts`, `headers` (map, incl. `x-mock-fault`), `value` (raw JSON string), `_ingested_at` |
 | `bronze.nasa_power_raw` | Landing file | `farm_id`, `ingest_dt`, `payload` (JSON string) |
 | `bronze.owm_raw` | Landing file | `farm_id`, `dt`, `payload` |
 | `bronze.soilgrids_raw` | Landing file | `farm_id`, `payload` |
@@ -172,11 +172,23 @@ ingester writes a new, timestamped file per run (a file overwritten under the
 same key would not be reloaded), so Bronze keeps each version and Silver picks
 the newest.
 
-`bronze.sensor_raw` is written by a Spark Structured Streaming query that
-reads the Kafka topic `sesame.sensor.raw` (micro-batch about every minute,
-checkpoint under `s3a://lakehouse/checkpoints/sensor_raw`). It keeps messages
-that cannot be parsed, so they can be replayed and sent to the DLQ topic
-`sesame.sensor.raw.dlq`.
+The sensor tables are written by `src/jobs/sensor_stream.py`, one long-running
+Spark application (the `spark-streaming` service) with two Structured
+Streaming queries, micro-batches every minute by default:
+
+1. **Kafka → `bronze.sensor_raw`**: every message of `sesame.sensor.raw` as
+   received, unreadable ones included, so they can be replayed. The Iceberg
+   sink commits each micro-batch once, so a restart neither loses nor
+   duplicates messages.
+2. **`bronze.sensor_raw` → Silver**: reads the Bronze table as a stream; per
+   micro-batch it parses and checks the messages (section 10), MERGEs valid
+   readings into `fact_sensor_reading`, rejected ones into
+   `quarantine_sensor`, and sends the unreadable ones (invalid JSON, missing
+   required fields) to the DLQ topic `sesame.sensor.raw.dlq`.
+
+Checkpoints (Kafka offsets, Bronze snapshots already read) live in the
+`spark_checkpoints` volume of that service; removing it replays the topic
+from the earliest offset, which the MERGEs absorb.
 
 ## 7. Silver dimensions
 
@@ -284,12 +296,14 @@ Read conversion factors from the response's `d_factor`; do not hard-code them.
 
 ### `fact_sensor_reading`
 
-Grain: `device_id` × `ts`. Built from `bronze.sensor_raw`; duplicates on
-the key are dropped, late messages keep their own `ts`.
+Grain: `device_id` × `ts`. Built from `bronze.sensor_raw`; on a duplicate
+key the first message (lowest Kafka offset) wins and later ones are dropped,
+also across micro-batches; late messages keep their own `ts`.
 
 | Column | Type | Message field |
 | --- | --- | --- |
 | `device_id` | STRING, FK → `dim_device` | `device_id` |
+| `farm_id` | STRING | `farm_id` (for regional aggregates) |
 | `plot_id` | STRING | `plot_id` |
 | `ts` | TIMESTAMP (UTC) | `timestamp` (epoch seconds) |
 | `sample_interval_s` | INT | `sample_interval_s` |
@@ -308,7 +322,8 @@ the key are dropped, late messages keep their own `ts`.
 | `battery_pct` | DOUBLE | `telemetry.battery_pct` |
 | `rssi_dbm` | INT | `telemetry.rssi_dbm` |
 | `irrigation_active` | BOOLEAN | `flags.irrigation_active` |
-| `kafka_offset` | BIGINT | Bronze lineage |
+| `kafka_partition`, `kafka_offset` | INT, BIGINT | Bronze lineage |
+| `_updated_at` | TIMESTAMP | Silver write time |
 
 ### `fact_weather_daily`
 
@@ -376,10 +391,12 @@ Messages that fail parsing or data-quality checks.
 
 | Column | Type | Description |
 | --- | --- | --- |
-| `kafka_partition`, `kafka_offset` | INT, BIGINT | Key back to Bronze |
+| `kafka_partition`, `kafka_offset` | INT, BIGINT | Key back to Bronze (primary key) |
+| `device_id`, `ts` | STRING, TIMESTAMP | When readable |
 | `raw_value` | STRING | Original message |
-| `dq_rule` | STRING | Rule that failed |
+| `dq_rule` | STRING | First rule that failed |
 | `dq_detail` | STRING | Offending value or error |
+| `mock_fault` | STRING | `x-mock-fault` header of an injected fault (NULL for real data), to measure what the checks catch |
 | `quarantined_at` | TIMESTAMP | When it was quarantined |
 
 ## 9. Gold
@@ -479,11 +496,22 @@ warning is only printed in the task log.
 | `fact_weather_daily` | `tmin_c` ≤ `tmax_c`; `precip_mm`, `rs_mj_m2`, `wind_2m_m_s` ≥ 0; `rh_pct` 0–100 | temperature outside −10 to 50 °C |
 | `fact_field_operation` | known `status` and `op_type`; `actual_date` set when `status = done`; `season_id` in `dim_season` | |
 
+Sensor messages (`src/lakehouse/sensor.py`, checked in this order; a message
+is quarantined under the first rule it breaks, and a missing value breaks
+the rule):
+
+| Rule | Sent to the DLQ topic |
+| --- | --- |
+| `valid_json` | yes |
+| `required_fields`: `device_id`, `timestamp`, `soil`, `canopy`, `weather_micro` present | yes |
+| `vwc_pct` 0–60; `rh_pct` 0–100; `air_temp_c` 5–50; `water_potential_kpa` < 0; `battery_pct` 0–100 | no |
+| `device_id` exists in `dim_device` (skipped until `dim_device` exists) | no |
+| No duplicate (`device_id`, `ts`): later duplicates are dropped, not quarantined | no |
+
 Planned for the next layers:
 
 | Layer / table | Checks |
 | --- | --- |
-| `bronze.sensor_raw` → `fact_sensor_reading` | Valid JSON and schema; `vwc_pct` 0–60; `rh_pct` 0–100; `air_temp_c` 5–50; `water_potential_kpa` < 0; no duplicate (`device_id`, `ts`); `device_id` exists in `dim_device` |
 | `fact_weather_daily` | NASA rows not older than 10 days (freshness, for the daily DAG) |
 | `fact_harvest` | `grain_moisture_pct` ≤ 7; `impurity_pct` ≤ 1 |
 
