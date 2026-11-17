@@ -1,45 +1,56 @@
-"""PoC bootstrap: load one full simulated season into Landing, Bronze and Silver.
+"""PoC bootstrap: load one full season of every demo farm into Landing, Bronze and Silver.
 
-Trigger manually once. It uploads the farm/season config and reference data,
-fetches SoilGrids and the NASA POWER weather for the season, loads everything
-into Bronze, then builds the Silver tables. The farm dimensions are built before
-the Silver tables that reference them (soil layers, field operations). The
-season defaults to Dong Xuan 2025 (sown 15/11/2025), which has real NASA weather.
+Trigger manually once. For each farm in common.farm.DEMO_FARMS (one task group
+per farm) it uploads the farm/season config and field plan, fetches SoilGrids
+and the NASA POWER weather for the season; the reference data is uploaded once.
+One Spark task per source then loads all farms into Bronze and builds the
+Silver tables. The farm dimensions are built before the Silver tables that
+reference them (soil layers, field operations).
+
+The farms are sown between 15/11 and 20/12/2025 (Dong Xuan), so the NASA window
+covers 01/11/2025 to 15/03/2026, which has real NASA weather.
 """
 from datetime import datetime
 
 from airflow import DAG
 from airflow.models.param import Param
+from airflow.utils.task_group import TaskGroup
 
+from common.farm import DEMO_FARMS, farm_cli_args
 from sesame_tasks import bronze, python_module, silver
 
 with DAG(
     dag_id="sesame_poc_bootstrap",
-    description="Load one simulated season (config, reference, soil, NASA weather) into Bronze and Silver",
+    description="Load one season of every demo farm (config, soil, NASA weather) and the "
+                "reference data into Bronze and Silver",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
     tags=["sesame", "poc"],
     params={
-        "planting_date": Param("2025-11-15", type="string", description="Sowing date YYYY-MM-DD"),
         "nasa_start": Param("20251101", type="string", description="NASA POWER start YYYYMMDD"),
-        "nasa_end": Param("20260215", type="string", description="NASA POWER end YYYYMMDD"),
+        "nasa_end": Param("20260315", type="string", description="NASA POWER end YYYYMMDD"),
     },
 ) as dag:
-    config = python_module("upload_user_config", "mock_iot.user_config_mock",
-                           "--planting-date {{ params.planting_date }}")
+    configs, soils, weathers = [], [], []
+    for farm in DEMO_FARMS:
+        with TaskGroup(group_id=farm.farm_id, tooltip=f"{farm.farm_id}: {farm.lat}, {farm.lon}"):
+            location = f"--farm-id {farm.farm_id} --lat {farm.lat} --lon {farm.lon}"
+            configs.append(python_module("upload_user_config", "mock_iot.user_config_mock",
+                                         farm_cli_args(farm)))
+            soils.append(python_module("ingest_soilgrids", "mock_iot.isric_ingest", location))
+            weathers.append(python_module(
+                "ingest_nasa_season", "mock_iot.nasa_ingest",
+                f"{location} --start {{{{ params.nasa_start }}}} --end {{{{ params.nasa_end }}}}"))
     reference = python_module("upload_reference", "mock_iot.mock_fao_db")
-    soil = python_module("ingest_soilgrids", "mock_iot.isric_ingest")
-    weather = python_module("ingest_nasa_season", "mock_iot.nasa_ingest",
-                            "--start {{ params.nasa_start }} --end {{ params.nasa_end }}")
 
     farm_dims = silver("user_config")  # dim_farm, dim_plot, dim_season, dim_device
     field_operations = silver("field_operation")
     soil_layers = silver("soilgrids")
 
-    config >> bronze("user_config") >> farm_dims
-    config >> bronze("field_operation") >> field_operations
+    configs >> bronze("user_config", "all_done") >> farm_dims
+    configs >> bronze("field_operation", "all_done") >> field_operations
     reference >> bronze("reference") >> silver("reference")
-    soil >> bronze("soilgrids") >> soil_layers
-    weather >> bronze("nasa_power") >> silver("nasa_power")
+    soils >> bronze("soilgrids", "all_done") >> soil_layers
+    weathers >> bronze("nasa_power", "all_done") >> silver("nasa_power")
     farm_dims >> [field_operations, soil_layers]  # their foreign keys point at the farm dimensions

@@ -108,3 +108,46 @@ def test_upload_raw_json_builds_key_and_checks_bucket_once(monkeypatch):
     assert uri == "s3://bkt/user_config/farm_id=F1/c.json"
     assert [c[0] for c in calls] == ["head", "create", "put", "put"]
     assert "mè".encode() in calls[2][3]  # ensure_ascii=False keeps Vietnamese readable
+
+
+def nasa_weather_cell(lat, lon):
+    """NASA POWER meteorology grid cell (MERRA-2, 0.5 deg lat x 0.625 deg lon)."""
+    return round(lat / 0.5), round(lon / 0.625)
+
+
+def test_demo_farms_are_distinct_regions_sown_in_the_dong_xuan_window():
+    from common.farm import DEMO_FARMS, demo_farm
+
+    ids = [f.farm_id for f in DEMO_FARMS]
+    assert len(ids) == len(set(ids)) >= 3
+    assert len({nasa_weather_cell(f.lat, f.lon) for f in DEMO_FARMS}) == len(DEMO_FARMS)
+    for farm in DEMO_FARMS:
+        assert 10.5 <= farm.lat <= 11.6 and 107.4 <= farm.lon <= 108.9   # Binh Thuan
+        assert in_sowing_window(farm.planting_date)
+        assert farm.season_id.endswith("_2025DX")
+    assert {f.drainage for f in DEMO_FARMS} == {"good", "poor"}
+    assert demo_farm("BINHTHUAN_01").lat == 11.08
+    with pytest.raises(KeyError):
+        demo_farm("NOWHERE")
+
+
+def test_season_window_fits_the_bootstrap_nasa_range():
+    from datetime import timedelta
+
+    from common.farm import DEMO_FARMS
+
+    for farm in DEMO_FARMS:
+        harvest = farm.planting_date + timedelta(days=season_length())
+        assert date(2025, 11, 1) <= farm.planting_date and harvest <= date(2026, 3, 15)
+
+
+def test_farm_cli_args_recreate_the_profile():
+    import argparse
+
+    from common.farm import DEMO_FARMS, add_farm_args, farm_cli_args, farm_from_args
+
+    parser = argparse.ArgumentParser()
+    add_farm_args(parser)
+    for farm in DEMO_FARMS:
+        again = farm_from_args(parser.parse_args(farm_cli_args(farm).split()))
+        assert again == farm

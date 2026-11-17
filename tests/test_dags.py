@@ -26,6 +26,20 @@ def test_dags_import_cleanly(dagbag):
     assert {"sesame_poc_bootstrap", "sesame_ingest_daily"} <= set(dagbag.dags)
 
 
+def test_bootstrap_ingests_every_demo_farm(dagbag):
+    from common.farm import DEMO_FARMS
+
+    dag = dagbag.dags["sesame_poc_bootstrap"]
+    for farm in DEMO_FARMS:
+        for step in ("upload_user_config", "ingest_soilgrids", "ingest_nasa_season"):
+            assert f"{farm.farm_id}.{step}" in dag.task_ids
+        assert f"--lat {farm.lat} --lon {farm.lon}" in dag.get_task(f"{farm.farm_id}.ingest_nasa_season").bash_command
+    nasa_inputs = upstream(dag, "bronze_nasa_power")
+    assert nasa_inputs == {f"{f.farm_id}.ingest_nasa_season" for f in DEMO_FARMS}
+    # one farm's failed API call must not block the others
+    assert dag.get_task("bronze_nasa_power").trigger_rule == "all_done"
+
+
 def test_bootstrap_builds_silver_after_bronze_and_the_farm_dimensions(dagbag):
     dag = dagbag.dags["sesame_poc_bootstrap"]
     assert upstream(dag, "silver_user_config") == {"bronze_user_config"}
@@ -40,3 +54,4 @@ def test_daily_dag_takes_nasa_to_silver(dagbag):
     dag = dagbag.dags["sesame_ingest_daily"]
     assert upstream(dag, "silver_nasa_power") == {"bronze_nasa_power"}
     assert "silver_owm" not in dag.task_ids
+    assert len(upstream(dag, "bronze_nasa_power")) == len(upstream(dag, "bronze_owm")) >= 3

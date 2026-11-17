@@ -131,18 +131,41 @@ tests run only where Airflow is installed.
 Spark jobs live in `src/jobs/`, shared Spark code in `src/lakehouse/`, and the
 Airflow DAGs in `dags/`.
 
+The PoC monitors four demo farms spread over Binh Thuan, listed once in
+`DEMO_FARMS` (`src/common/farm.py`). Each sits in a different NASA POWER
+weather cell (about 0.5° x 0.625°, so farms closer together would get the same
+NASA weather) and differs in soil, drainage or sowing date. All are sown in
+the Dong Xuan 2025-26 season:
+
+| Farm | Area | Soil, drainage | Sown | Sensors | Scenario |
+| --- | --- | --- | --- | --- | --- |
+| `BINHTHUAN_01` (11.08, 108.12) | Ham Thuan Bac | loamy sand, good | 15/11/2025 | 2 | reference plot |
+| `BINHTHUAN_02` (11.28, 108.50) | Bac Binh | loamy sand, **poor** | 25/11/2025 | 2 | ponds after heavy rain |
+| `BINHTHUAN_03` (11.10, 107.68) | Tanh Linh | sandy loam, good | 20/12/2025 | 2 | sown late in the window |
+| `BINHTHUAN_04` (10.72, 107.72) | Ham Tan | sand, good | 05/12/2025 | 1 | dries out fast |
+
+The points are illustrative. Add a farm to `DEMO_FARMS` and both DAGs pick it up.
+
 | DAG | Schedule | What it does |
 | --- | --- | --- |
-| `sesame_poc_bootstrap` | manual | Uploads the farm/season config (sown 15/11/2025 by default), reference data, SoilGrids and the NASA POWER weather for the season, loads them into Bronze, then builds Silver |
-| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | NASA POWER (window D-14 to D-7) into Bronze and Silver; OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze |
+| `sesame_poc_bootstrap` | manual | Per farm (one task group each): uploads the farm/season config and field plan, fetches SoilGrids and the NASA POWER weather of the season (01/11/2025 to 15/03/2026). Uploads the reference data once, loads everything into Bronze, then builds Silver |
+| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | Per farm: NASA POWER (window D-14 to D-7) into Bronze and Silver; OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze |
 
-Trigger the bootstrap from the Airflow UI, or run the same steps by hand:
+The Spark tasks are one per source, not per farm: each loads every farm. A
+Bronze task waits for all farms' ingest tasks and then loads whatever landed,
+so one farm's failed API call does not hold up the others (that task stays
+red until it is cleared and re-run).
+
+Trigger the bootstrap from the Airflow UI, or run the same steps by hand
+(shown for one farm; repeat with each farm's values from the table above):
 
 ```bash
-python -m mock_iot.user_config_mock --planting-date 2025-11-15
+python -m mock_iot.user_config_mock --farm-id BINHTHUAN_02 --lat 11.28 --lon 108.50 \
+    --area 8000 --soil-texture loamy_sand --drainage poor --planting-date 2025-11-25 --devices 2
 python -m mock_iot.mock_fao_db
-python -m mock_iot.isric_ingest
-python -m mock_iot.nasa_ingest --start 20251101 --end 20260215
+python -m mock_iot.isric_ingest --farm-id BINHTHUAN_02 --lat 11.28 --lon 108.50
+python -m mock_iot.nasa_ingest --farm-id BINHTHUAN_02 --lat 11.28 --lon 108.50 \
+    --start 20251101 --end 20260315
 docker exec spark-master /opt/spark/bin/spark-submit \
     --master spark://spark-master:7077 /opt/spark-jobs/landing_to_bronze.py --source all
 docker exec spark-master /opt/spark/bin/spark-submit \
@@ -159,15 +182,15 @@ re-run too. Look at the result:
 ```bash
 docker exec spark-master /opt/spark/bin/spark-sql --master spark://spark-master:7077 -e "
   SHOW TABLES IN lakehouse.silver;
-  SELECT min(date), max(date), count(*) FROM lakehouse.silver.fact_weather_daily;" 2>/dev/null
+  SELECT farm_id, min(date), max(date), count(*) FROM lakehouse.silver.fact_weather_daily GROUP BY 1;" 2>/dev/null
 ```
 
- When NASA POWER or SoilGrids cannot be reached, write payloads
-with the same structure (marked `"mock": true`) instead:
+When NASA POWER or SoilGrids cannot be reached, write payloads with the same
+structure (marked `"mock": true`) for every demo farm instead:
 
 ```bash
-python -m mock_iot.mock_api_responses nasa --start 20251101 --end 20260215
-python -m mock_iot.mock_api_responses soilgrids
+python -m mock_iot.mock_api_responses nasa --all-farms --start 20251101 --end 20260315
+python -m mock_iot.mock_api_responses soilgrids --all-farms
 ```
 
 ## Sesame farm monitoring dashboard

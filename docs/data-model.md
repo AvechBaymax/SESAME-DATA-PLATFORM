@@ -33,6 +33,13 @@ The architecture and flows are drawn in
 IDs nest farm → plot → season / device, so an ID shows where it belongs.
 The mocks already generate them this way (`src/common/farm.py`).
 
+The PoC has four demo farms (`DEMO_FARMS` in `src/common/farm.py`,
+`BINHTHUAN_01` to `BINHTHUAN_04`), one plot and one Dong Xuan 2025 season
+each. Every table already carries `farm_id` or an ID nested under it, so the
+jobs need no change for more farms. NASA POWER weather is gridded (about
+0.5° × 0.625°), so the farms are placed in different cells; farms in one cell
+share their NASA weather and differ only through sensors and soil.
+
 | Key | Rule | Example |
 | --- | --- | --- |
 | `farm_id` | Upper case, province + number | `BINHTHUAN_01` |

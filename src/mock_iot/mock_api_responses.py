@@ -8,14 +8,15 @@ developed and tested when the APIs are unreachable. Every payload carries
 "mock": true at the top level so it can be told apart from real data.
 
 Usage:
-  python -m mock_iot.mock_api_responses nasa --start 20251101 --end 20260215
+  python -m mock_iot.mock_api_responses nasa --start 20251101 --end 20260315
   python -m mock_iot.mock_api_responses soilgrids
+  python -m mock_iot.mock_api_responses nasa --all-farms   # every farm in common.farm.DEMO_FARMS
 """
 import argparse
 from datetime import datetime, timedelta, timezone
 
 from common.config import get_minio_settings
-from common.farm import DEFAULT_FARM_ID, DEFAULT_LAT, DEFAULT_LON
+from common.farm import DEFAULT_FARM_ID, DEFAULT_LAT, DEFAULT_LON, DEMO_FARMS
 from common.minio_utils import upload_raw_json
 from mock_iot.nasa_ingest import DEFAULT_PARAMETERS
 from mock_iot.weather import ClimatologyWeather
@@ -95,24 +96,29 @@ def main(argv=None):
     ap.add_argument("--lat", type=float, default=DEFAULT_LAT)
     ap.add_argument("--lon", type=float, default=DEFAULT_LON)
     ap.add_argument("--start", default="20251101", help="nasa: YYYYMMDD")
-    ap.add_argument("--end", default="20260215", help="nasa: YYYYMMDD")
+    ap.add_argument("--end", default="20260315", help="nasa: YYYYMMDD")
+    ap.add_argument("--all-farms", action="store_true",
+                    help="write one payload per demo farm (ignores --farm-id/--lat/--lon)")
     ap.add_argument("--bucket", default=None)
     args = ap.parse_args(argv)
     settings = get_minio_settings(bucket=args.bucket)
+    farms = ([(f.farm_id, f.lat, f.lon) for f in DEMO_FARMS] if args.all_farms
+             else [(args.farm_id, args.lat, args.lon)])
+    for farm_id, lat, lon in farms:
+        print(f"Uploaded {upload_mock(args, settings, farm_id, lat, lon)}")
 
+
+def upload_mock(args, settings, farm_id, lat, lon):
+    now = datetime.now(timezone.utc)
     if args.api == "nasa":
         start = datetime.strptime(args.start, "%Y%m%d").date()
         end = datetime.strptime(args.end, "%Y%m%d").date()
-        payload = nasa_payload(args.lat, args.lon, start, end, seed=args.farm_id)
-        now = datetime.now(timezone.utc)
-        uri = upload_raw_json("nasa_power", payload,
-                              filename=f"data_{args.start}_to_{args.end}_{now:%H%M%S}Z_mock.json",
-                              settings=settings, farm_id=args.farm_id, ingest_dt=f"{now:%Y-%m-%d}")
-    else:
-        uri = upload_raw_json("soilgrids", soilgrids_payload(args.lat, args.lon),
-                              filename=f"soilgrids_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_mock.json",
-                              settings=settings, farm_id=args.farm_id)
-    print(f"Uploaded {uri}")
+        return upload_raw_json("nasa_power", nasa_payload(lat, lon, start, end, seed=farm_id),
+                               filename=f"data_{args.start}_to_{args.end}_{now:%H%M%S}Z_mock.json",
+                               settings=settings, farm_id=farm_id, ingest_dt=f"{now:%Y-%m-%d}")
+    return upload_raw_json("soilgrids", soilgrids_payload(lat, lon),
+                           filename=f"soilgrids_{now:%Y%m%dT%H%M%SZ}_mock.json",
+                           settings=settings, farm_id=farm_id)
 
 
 if __name__ == "__main__":

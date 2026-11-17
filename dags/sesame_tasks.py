@@ -18,9 +18,10 @@ def python_module(task_id, module, args=""):
     return BashOperator(task_id=task_id, bash_command=f"python -m {module} {args}".strip())
 
 
-def spark_job(task_id, job, source):
+def spark_job(task_id, job, source, trigger_rule="all_success"):
     return SparkSubmitOperator(
         task_id=task_id,
+        trigger_rule=trigger_rule,
         conn_id="spark_default",
         application=f"{SPARK_JOBS}/{job}",
         application_args=["--source", source],
@@ -30,9 +31,14 @@ def spark_job(task_id, job, source):
     )
 
 
-def bronze(source):
-    """Load new landing files of one source into lakehouse.bronze.<table>."""
-    return spark_job(f"bronze_{source}", "landing_to_bronze.py", source)
+def bronze(source, trigger_rule="all_success"):
+    """Load new landing files of one source into lakehouse.bronze.<table>.
+
+    Fed by one ingest task per farm, pass trigger_rule="all_done": Bronze then
+    loads the farms that worked even when one farm's API call failed (that task
+    stays red, so the DAG run is still marked failed).
+    """
+    return spark_job(f"bronze_{source}", "landing_to_bronze.py", source, trigger_rule)
 
 
 def silver(source):

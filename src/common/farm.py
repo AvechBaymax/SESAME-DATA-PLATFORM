@@ -79,6 +79,44 @@ def ring_area_perimeter(ring):
     return abs(area) / 2, perimeter
 
 
+# Demo farms for the multi-region PoC (Dong Xuan 2025-26 season, real NASA weather).
+# The points are illustrative, spread over Binh Thuan so that each falls in a
+# different NASA POWER weather cell (0.5 deg lat x 0.625 deg lon); farms closer
+# together would get identical NASA weather. SoilGrids (250 m) differs anyway.
+DEMO_FARMS = (
+    # Ham Thuan Bac: the reference plot, sown on time, well drained
+    FarmProfile(farm_id="BINHTHUAN_01", lat=11.08, lon=108.12, area_m2=5000.0,
+                soil_texture="loamy_sand", drainage="good",
+                planting_date=date(2025, 11, 15), device_count=2),
+    # Bac Binh: compacted, low-lying plot that ponds after heavy rain
+    FarmProfile(farm_id="BINHTHUAN_02", lat=11.28, lon=108.50, area_m2=8000.0,
+                soil_texture="loamy_sand", drainage="poor",
+                planting_date=date(2025, 11, 25), device_count=2),
+    # Tanh Linh: alluvial sandy loam, sown late in the window
+    FarmProfile(farm_id="BINHTHUAN_03", lat=11.10, lon=107.68, area_m2=12000.0,
+                soil_texture="sandy_loam", drainage="good",
+                planting_date=date(2025, 12, 20), device_count=2),
+    # Ham Tan: coarse sand that dries out fast
+    FarmProfile(farm_id="BINHTHUAN_04", lat=10.72, lon=107.72, area_m2=6000.0,
+                soil_texture="sand", drainage="good",
+                planting_date=date(2025, 12, 5), device_count=1),
+)
+
+
+def demo_farm(farm_id):
+    for farm in DEMO_FARMS:
+        if farm.farm_id == farm_id:
+            return farm
+    raise KeyError(f"unknown demo farm {farm_id!r}; known: {[f.farm_id for f in DEMO_FARMS]}")
+
+
+def farm_cli_args(farm):
+    """The add_farm_args flags that recreate a profile, e.g. for a DAG task's command line."""
+    return (f"--farm-id {farm.farm_id} --plot-id {farm.plot_id} --lat {farm.lat} --lon {farm.lon} "
+            f"--area {farm.area_m2} --soil-texture {farm.soil_texture} --drainage {farm.drainage} "
+            f"--planting-date {farm.planting_date.isoformat()} --devices {farm.device_count}")
+
+
 def add_farm_args(parser):
     parser.add_argument("--farm-id", default=DEFAULT_FARM_ID)
     parser.add_argument("--plot-id", default=None, help="default: <farm-id>_P01")
