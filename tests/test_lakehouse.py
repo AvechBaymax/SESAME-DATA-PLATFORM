@@ -33,3 +33,10 @@ def test_every_source_has_a_unique_table_and_constant_columns_cover_its_prefixes
     for source in SOURCES.values():
         for by_prefix in source.columns.values():
             assert set(by_prefix) == set(source.prefixes)
+
+
+def test_split_ddl_keeps_nested_types_together():
+    spark_helpers = pytest.importorskip("lakehouse.spark")
+    ddl = "a STRING, headers MAP<STRING, STRING>, m STRUCT<x: INT, y: ARRAY<STRING>>, ts TIMESTAMP"
+    assert spark_helpers.split_ddl(ddl) == [
+        "a STRING", "headers MAP<STRING, STRING>", "m STRUCT<x: INT, y: ARRAY<STRING>>", "ts TIMESTAMP"]

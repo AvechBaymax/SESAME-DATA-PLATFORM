@@ -60,3 +60,30 @@ def merge_into(spark, df, full_name, keys):
         WHEN MATCHED AND t._file_path <> s._file_path THEN UPDATE SET *
         WHEN NOT MATCHED THEN INSERT *
     """)
+
+
+def create_or_evolve_table(spark, full_name, ddl, partitioned_by=""):
+    """Create the table, or add the DDL columns it does not have yet (new columns are NULL
+    in existing rows). Columns are never dropped or retyped here."""
+    if not table_exists(spark, full_name):
+        create_table_if_missing(spark, full_name, ddl, partitioned_by)
+        return
+    existing = {f.name for f in spark.table(full_name).schema.fields}
+    for column in split_ddl(ddl):
+        name, kind = column.split(" ", 1)
+        if name not in existing:
+            spark.sql(f"ALTER TABLE {full_name} ADD COLUMN {name} {kind}")
+            print(f"[{full_name}] added column {name} {kind}")
+
+
+def split_ddl(ddl):
+    """Column definitions of a DDL string, keeping commas inside types such as MAP<K, V>."""
+    columns, depth, current = [], 0, ""
+    for char in ddl:
+        depth += {"<": 1, ">": -1}.get(char, 0)
+        if char == "," and depth == 0:
+            columns.append(current.strip())
+            current = ""
+        else:
+            current += char
+    return columns + [current.strip()] if current.strip() else columns

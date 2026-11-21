@@ -27,7 +27,8 @@ MESSAGE_SCHEMA = (
     "water_potential_kpa: DOUBLE, oxygen_level_pct: DOUBLE>, "
     "canopy: STRUCT<leaf_wetness_min: DOUBLE, surface_temp_c: DOUBLE>, "
     "weather_micro: STRUCT<ambient_temp_c: DOUBLE, humidity_pct: DOUBLE, rain_mm: DOUBLE, "
-    "wind_speed_m_s: DOUBLE, solar_rad_w_m2: DOUBLE>>, "
+    "wind_speed_m_s: DOUBLE, solar_rad_w_m2: DOUBLE>, "
+    "irrigation: STRUCT<applied_mm: DOUBLE>>, "
     "telemetry STRUCT<battery_pct: DOUBLE, rssi_dbm: INT, error_codes: ARRAY<STRING>>, "
     "flags STRUCT<rain_detected: BOOLEAN, irrigation_active: BOOLEAN>"
 )
@@ -53,6 +54,7 @@ READING_FIELDS = {
     "battery_pct": ("DOUBLE", "telemetry.battery_pct"),
     "rssi_dbm": ("INT", "telemetry.rssi_dbm"),
     "irrigation_active": ("BOOLEAN", "flags.irrigation_active"),
+    "irrigation_mm": ("DOUBLE", "measurements.irrigation.applied_mm"),
 }
 
 READING_DDL = ("device_id STRING, farm_id STRING, plot_id STRING, ts TIMESTAMP, "

@@ -99,3 +99,17 @@ def test_merge_is_idempotent_and_updates_from_newer_files(spark):
     assert spark.sql(f"SELECT * FROM {target}.snapshots").count() > snapshots
     partitions = {r[0] for r in spark.sql(f"SELECT partition.date_month FROM {target}.partitions").collect()}
     assert len(partitions) == 1                          # all in November 2025
+
+
+@pytest.mark.skipif(not ICEBERG_JAR, reason="set ICEBERG_SPARK_JAR to run the Iceberg test")
+def test_create_or_evolve_adds_new_columns(spark):
+    from lakehouse.spark import create_or_evolve_table
+
+    target = "test.silver.evolving"
+    spark.sql("CREATE NAMESPACE IF NOT EXISTS test.silver")
+    create_or_evolve_table(spark, target, "id STRING, tags MAP<STRING, STRING>")
+    spark.sql(f"INSERT INTO {target} VALUES ('a', map('k', 'v'))")
+    create_or_evolve_table(spark, target, "id STRING, tags MAP<STRING, STRING>, irrigation_mm DOUBLE")
+    row = spark.table(target).first()
+    assert spark.table(target).columns == ["id", "tags", "irrigation_mm"]
+    assert row["id"] == "a" and row["irrigation_mm"] is None

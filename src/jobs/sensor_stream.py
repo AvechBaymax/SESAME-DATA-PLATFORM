@@ -22,12 +22,13 @@ service in docker-compose, not Airflow):
 import argparse
 import os
 import sys
+import time
 
 from pyspark.sql import Window
 from pyspark.sql import functions as F
 
 from lakehouse import sensor
-from lakehouse.spark import create_table_if_missing, ensure_namespace, get_spark
+from lakehouse.spark import create_or_evolve_table, ensure_namespace, get_spark
 from lakehouse.tables import table
 
 BRONZE = table("bronze", sensor.BRONZE_TABLE)
@@ -39,9 +40,9 @@ DEVICES = table("silver", "dim_device")
 def ensure_tables(spark):
     ensure_namespace(spark, "bronze")
     ensure_namespace(spark, "silver")
-    create_table_if_missing(spark, BRONZE, sensor.BRONZE_DDL, sensor.BRONZE_PARTITION)
-    create_table_if_missing(spark, READINGS, sensor.READING_DDL, sensor.READING_PARTITION)
-    create_table_if_missing(spark, QUARANTINE, sensor.QUARANTINE_DDL)
+    create_or_evolve_table(spark, BRONZE, sensor.BRONZE_DDL, sensor.BRONZE_PARTITION)
+    create_or_evolve_table(spark, READINGS, sensor.READING_DDL, sensor.READING_PARTITION)
+    create_or_evolve_table(spark, QUARANTINE, sensor.QUARANTINE_DDL)
 
 
 # ---- query 1: Kafka -> Bronze --------------------------------------------------------------
@@ -149,6 +150,7 @@ def process_batch(args):
     def handle(batch_df, batch_id):
         # foreachBatch runs on a cloned session: temp views must live in that one
         spark = batch_df.sparkSession
+        started = time.monotonic()
         devices = spark.table(DEVICES).select("device_id") if spark.catalog.tableExists(DEVICES) else None
         if devices is None:
             print(f"[sensor_silver] batch {batch_id}: {DEVICES} not built yet, device check skipped")
@@ -162,7 +164,7 @@ def process_batch(args):
         by_rule = {r["dq_rule"]: r["count"] for r in rejected.groupBy("dq_rule").count().collect()}
         print(f"[sensor_silver] batch {batch_id}: {batch_df.count()} message(s), "
               f"{readings.count()} reading(s), {sum(by_rule.values())} quarantined {by_rule}, "
-              f"{dlq} to DLQ")
+              f"{dlq} to DLQ, {time.monotonic() - started:.1f} s")
         for df in (readings, rejected, batch_df):
             df.unpersist()
     return handle

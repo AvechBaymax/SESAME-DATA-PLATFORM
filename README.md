@@ -150,8 +150,8 @@ The points are illustrative. Add a farm to `DEMO_FARMS` and both DAGs pick it up
 
 | DAG | Schedule | What it does |
 | --- | --- | --- |
-| `sesame_poc_bootstrap` | manual | Per farm (one task group each): uploads the farm/season config and field plan, fetches SoilGrids and the NASA POWER weather of the season (01/11/2025 to 15/03/2026). Uploads the reference data once, loads everything into Bronze, then builds Silver |
-| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | Per farm: NASA POWER (window D-14 to D-7) into Bronze and Silver; OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze |
+| `sesame_poc_bootstrap` | manual | Per farm (one task group each): uploads the farm/season config and field plan, fetches SoilGrids and the NASA POWER weather of the season (01/11/2025 to 15/03/2026). Uploads the reference data once, loads everything into Bronze, builds Silver, then Gold |
+| `sesame_ingest_daily` | 23:00 UTC (06:00 VN) | Per farm: NASA POWER (window D-14 to D-7) into Bronze and Silver; OpenWeatherMap (skipped without `OWM_API_KEY`) into Bronze; then Gold again, with the sensor readings streamed in since |
 
 The Spark tasks are one per source, not per farm: each loads every farm. A
 Bronze task waits for all farms' ingest tasks and then loads whatever landed,
@@ -230,7 +230,42 @@ docker exec spark-master /opt/spark/bin/spark-sql --master spark://spark-master:
 ```
 
 Restarting the service resumes from its checkpoint (volume
-`spark_checkpoints`); a replayed message is not written twice.
+`spark_checkpoints`); a replayed message is not written twice. To start the
+stream over, for example after its settings or the message schema changed,
+reset it (deletes the sensor tables, checkpoints and the messages in the
+sensor topics; asks first), then send the readings again:
+
+```bash
+bash infrastructure/scripts/reset_sensor_stream.sh
+```
+
+## Gold: water balance per season (PoC)
+
+`src/jobs/silver_to_gold.py` (task `gold_build`, last in both DAGs) turns
+Silver into the monitoring tables (`docs/data-model.md`, section 9):
+
+- `lakehouse.gold.feat_season_daily`: per season and day, the FAO-56 water
+  balance: ET0 from NASA POWER, Kc and growth stage by days after sowing, the
+  growing root zone's available water, rain (plot gauges, else NASA),
+  irrigation from the sensors, depletion and the stress coefficient Ks, plus
+  soil moisture, soil O₂, leaf wetness, degree days and daily stress flags.
+- `lakehouse.gold.agg_season_summary`: per season: rain, irrigation, crop
+  water need (ETc) and use (ETa), stress, waterlogging and heat days, rain in
+  the harvest window.
+- `lakehouse.gold.agg_region_daily`: per province and day: how many farms are
+  active, water-stressed, waterlogged or heat-stressed, and their averages.
+
+Each run recomputes the tables from Silver. Run it by hand after new sensor
+data, or let the daily DAG do it:
+
+```bash
+docker exec spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 \
+    --conf spark.sql.shuffle.partitions=4 /opt/spark-jobs/silver_to_gold.py
+docker exec spark-master /opt/spark/bin/spark-sql --master spark://spark-master:7077 -e "
+  SELECT season_id, status, round(precip_total_mm) rain, round(irrigation_total_mm) irrigation,
+         round(etc_total_mm) etc, round(eta_etc_ratio, 2) eta_etc, water_stress_days, waterlog_days
+  FROM lakehouse.gold.agg_season_summary ORDER BY 1;" 2>/dev/null
+```
 
 ## Sesame farm monitoring dashboard
 

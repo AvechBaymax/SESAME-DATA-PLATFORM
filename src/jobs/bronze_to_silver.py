@@ -20,7 +20,7 @@ from lakehouse import quality
 from lakehouse.silver import SOURCES as SILVER_SOURCES
 from lakehouse.silver import tables_for, to_tuple
 from lakehouse.sources import SOURCES as BRONZE_SOURCES
-from lakehouse.spark import (create_table_if_missing, ensure_namespace, get_spark, latest_per_key,
+from lakehouse.spark import (create_or_evolve_table, ensure_namespace, get_spark, latest_per_key,
                              merge_into, table_exists)
 from lakehouse.tables import table
 
@@ -58,7 +58,7 @@ def load(spark, silver):
     df = build(spark, silver, spark.table(bronze_name)).cache()
     quality.enforce(quality.check_table(spark, silver, df, silver_table))
 
-    create_table_if_missing(spark, target, silver.ddl(), silver.partitioned_by)
+    create_or_evolve_table(spark, target, silver.ddl(), silver.partitioned_by)
     before = spark.table(target).count()
     merge_into(spark, df, target, silver.keys)
     after = spark.table(target).count()

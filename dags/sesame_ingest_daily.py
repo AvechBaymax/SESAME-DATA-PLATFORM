@@ -1,5 +1,5 @@
 """Daily ingest of external weather APIs for every demo farm into Landing and Bronze,
-NASA POWER on to Silver.
+NASA POWER on to Silver, then the Gold tables are recomputed.
 
 Runs at 23:00 UTC (06:00 in Vietnam). NASA POWER lags a few days, so the
 ingester fetches the window from 14 to 7 days ago. OpenWeatherMap is skipped
@@ -13,11 +13,11 @@ from airflow.operators.bash import BashOperator
 from airflow.utils.task_group import TaskGroup
 
 from common.farm import DEMO_FARMS
-from sesame_tasks import bronze, python_module, silver
+from sesame_tasks import bronze, gold, python_module, silver
 
 with DAG(
     dag_id="sesame_ingest_daily",
-    description="NASA POWER and OpenWeatherMap -> Landing -> Bronze (NASA -> Silver)",
+    description="NASA POWER and OpenWeatherMap -> Landing -> Bronze (NASA -> Silver), then Gold",
     start_date=datetime(2026, 11, 1),
     schedule="0 23 * * *",
     catchup=False,
@@ -35,5 +35,6 @@ with DAG(
                 bash_command='[ -n "$OWM_API_KEY" ] || { echo "OWM_API_KEY not set"; exit 99; }; '
                              f"python -m mock_iot.owm_ingest {location}",
             ))
-    nasa >> bronze("nasa_power", "all_done") >> silver("nasa_power")
+    # Gold also picks up the sensor readings streamed in since the last run
+    nasa >> bronze("nasa_power", "all_done") >> silver("nasa_power") >> gold()
     owm >> bronze("owm")  # skipped when every farm's OWM task was skipped (no key)

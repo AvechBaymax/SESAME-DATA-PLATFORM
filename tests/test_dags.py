@@ -50,6 +50,17 @@ def test_bootstrap_builds_silver_after_bronze_and_the_farm_dimensions(dagbag):
     assert {t.pool for t in spark_tasks} == {"spark"}
 
 
+def test_gold_runs_after_every_silver_task(dagbag):
+    dag = dagbag.dags["sesame_poc_bootstrap"]
+    silver_tasks = {t.task_id for t in dag.tasks if t.task_id.startswith("silver_")}
+    assert upstream(dag, "gold_build") == silver_tasks
+    assert dag.get_task("gold_build").trigger_rule == "all_done"
+    daily = dagbag.dags["sesame_ingest_daily"]
+    assert upstream(daily, "gold_build") == {"silver_nasa_power"}
+    spark_tasks = [t for t in dag.tasks if t.task_id.startswith(("bronze_", "silver_", "gold_"))]
+    assert all(t.conf["spark.sql.shuffle.partitions"] == "4" for t in spark_tasks)
+
+
 def test_daily_dag_takes_nasa_to_silver(dagbag):
     dag = dagbag.dags["sesame_ingest_daily"]
     assert upstream(dag, "silver_nasa_power") == {"bronze_nasa_power"}

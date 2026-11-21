@@ -134,24 +134,24 @@ class SensorNode:
     def step(self, t0, t1):
         """Advance the state over [t0, t1) and return one telemetry message stamped t1."""
         rain_total = 0.0
-        irrigated = False
+        irrigation_total = 0.0
         wet_seconds = 0.0
         cursor = t0
         while cursor < t1:
             nxt = min(cursor + MAX_SUBSTEP, t1)
             rain, irrigation = self._advance(cursor, nxt)
             rain_total += rain
-            irrigated = irrigated or irrigation > 0
+            irrigation_total += irrigation
             if self.wet_until is not None and self.wet_until > cursor:
                 wet_seconds += (min(nxt, self.wet_until) - cursor).total_seconds()
             cursor = nxt
-        return self._message(t1, t1 - t0, rain_total, irrigated, wet_seconds)
+        return self._message(t1, t1 - t0, rain_total, irrigation_total, wet_seconds)
 
     # ---- readings ----------------------------------------------------------------------
     def _noise(self, sigma):
         return self.rng.gauss(0, sigma)
 
-    def _message(self, t, interval, rain_mm, irrigated, wet_seconds):
+    def _message(self, t, interval, rain_mm, irrigation_mm, wet_seconds):
         air = self.weather.air_temp_c(t)
         day = self.weather.solar_day(t)
         d = self.weather.daily(day)
@@ -206,6 +206,9 @@ class SensorNode:
                     "wind_speed_m_s": round(max(self.weather.wind_m_s(t) + self._noise(0.4), 0.0), 1),
                     "solar_rad_w_m2": round(max(solar + self._noise(5), 0.0) if solar else 0.0, 0),
                 },
+                "irrigation": {  # flow meter on the sprinkler line, depth applied this interval
+                    "applied_mm": round(irrigation_mm, 2),
+                },
             },
             "telemetry": {
                 "battery_pct": round(self.battery, 1),
@@ -214,6 +217,6 @@ class SensorNode:
             },
             "flags": {
                 "rain_detected": rain_mm > 0,
-                "irrigation_active": irrigated,
+                "irrigation_active": irrigation_mm > 0,
             },
         }

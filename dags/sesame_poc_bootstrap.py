@@ -4,8 +4,8 @@ Trigger manually once. For each farm in common.farm.DEMO_FARMS (one task group
 per farm) it uploads the farm/season config and field plan, fetches SoilGrids
 and the NASA POWER weather for the season; the reference data is uploaded once.
 One Spark task per source then loads all farms into Bronze and builds the
-Silver tables. The farm dimensions are built before the Silver tables that
-reference them (soil layers, field operations).
+Silver tables, and a last one recomputes Gold. The farm dimensions are built
+before the Silver tables that reference them (soil layers, field operations).
 
 The farms are sown between 15/11 and 20/12/2025 (Dong Xuan), so the NASA window
 covers 01/11/2025 to 15/03/2026, which has real NASA weather.
@@ -17,12 +17,12 @@ from airflow.models.param import Param
 from airflow.utils.task_group import TaskGroup
 
 from common.farm import DEMO_FARMS, farm_cli_args
-from sesame_tasks import bronze, python_module, silver
+from sesame_tasks import bronze, gold, python_module, silver
 
 with DAG(
     dag_id="sesame_poc_bootstrap",
     description="Load one season of every demo farm (config, soil, NASA weather) and the "
-                "reference data into Bronze and Silver",
+                "reference data into Bronze and Silver, then build Gold",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
@@ -47,10 +47,13 @@ with DAG(
     farm_dims = silver("user_config")  # dim_farm, dim_plot, dim_season, dim_device
     field_operations = silver("field_operation")
     soil_layers = silver("soilgrids")
+    crop_reference = silver("reference")  # dim_growth_stage, dim_crop
+    weather_daily = silver("nasa_power")
 
     configs >> bronze("user_config", "all_done") >> farm_dims
     configs >> bronze("field_operation", "all_done") >> field_operations
-    reference >> bronze("reference") >> silver("reference")
+    reference >> bronze("reference") >> crop_reference
     soils >> bronze("soilgrids", "all_done") >> soil_layers
-    weathers >> bronze("nasa_power", "all_done") >> silver("nasa_power")
+    weathers >> bronze("nasa_power", "all_done") >> weather_daily
     farm_dims >> [field_operations, soil_layers]  # their foreign keys point at the farm dimensions
+    [farm_dims, field_operations, soil_layers, crop_reference, weather_daily] >> gold()

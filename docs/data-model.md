@@ -1,7 +1,8 @@
 # Sesame Data Platform: Data Model
 
-Status: November 2026. Landing, Bronze and Silver are built, batch and the
-sensor stream; Gold is designed here but not yet built.
+Status: November 2026. Landing, Bronze and Silver (batch and the sensor
+stream) and the Gold water-balance tables are built. `alert_event` is next;
+`yield_prediction` stays a design and is not built in the PoC.
 Stack: RustFS object storage (S3 API), Apache Iceberg tables in a JDBC
 catalog on Postgres, Apache Spark for both batch and Structured Streaming.
 The architecture and flows are drawn in
@@ -187,8 +188,16 @@ Streaming queries, micro-batches every minute by default:
    required fields) to the DLQ topic `sesame.sensor.raw.dlq`.
 
 Checkpoints (Kafka offsets, Bronze snapshots already read) live in the
-`spark_checkpoints` volume of that service; removing it replays the topic
-from the earliest offset, which the MERGEs absorb.
+`spark_checkpoints` volume of that service. Removing them alone would replay
+the topic and append the messages to Bronze a second time (Silver would
+absorb the replay); `infrastructure/scripts/reset_sensor_stream.sh` starts the
+stream over cleanly instead (tables, checkpoints and topics together).
+
+The stream runs with 4 shuffle partitions instead of Spark's 200: streaming
+cannot coalesce them, and on one core 200 mostly empty tasks per step made a
+full-season micro-batch take 35.8 s instead of 21.0 s (80,955 messages; 60 s
+instead of 40 s for the whole catch-up run). Spark stores this setting in the
+checkpoint, so it changes only for a stream started over.
 
 ## 7. Silver dimensions
 
@@ -206,7 +215,7 @@ landing file the row came from) and `_updated_at` (Silver write time).
 | Bronze source | Silver tables |
 | --- | --- |
 | `user_config` | `dim_farm`, `dim_plot`, `dim_season`, `dim_device` |
-| `reference` | `dim_growth_stage` |
+| `reference` | `dim_growth_stage`, `dim_crop` |
 | `soilgrids` | `dim_soil_layer` |
 | `nasa_power` | `fact_weather_daily` (`source = 'nasa_power'`) |
 | `field_operation` | `fact_field_operation` |
@@ -273,6 +282,21 @@ One row per crop and FAO stage; built from `fao_reference`.
 | `das_start`, `das_end` | INT | Stage window in days after sowing, `das_start` ≤ DAS < `das_end` (15/25/25/10 split of 75 days) |
 | `kc_start`, `kc_end` | DOUBLE | Crop coefficient at stage start and end (0.35 → 1.10 → 0.25) |
 
+### `dim_crop`
+
+One row per crop; the constants of the FAO reference the Gold water balance
+needs, so a revised reference changes Gold without a code change.
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `crop_id` | STRING, PK | `sesame` |
+| `crop_name` | STRING | Display name |
+| `season_length_days` | INT | Sum of the stage lengths (75) |
+| `kc_ini`, `kc_mid`, `kc_end` | DOUBLE | FAO-56 crop coefficients |
+| `max_root_depth_low_m`, `max_root_depth_high_m` | DOUBLE | FAO-56 range of maximum rooting depth (1.0–1.5 m) |
+| `depletion_fraction_p` | DOUBLE | Share of TAW the crop uses before stress (0.6) |
+| `max_crop_height_m` | DOUBLE | 1.0 |
+
 ### `dim_soil_layer`
 
 | Column | Type | Description | Source |
@@ -322,6 +346,7 @@ also across micro-batches; late messages keep their own `ts`.
 | `battery_pct` | DOUBLE | `telemetry.battery_pct` |
 | `rssi_dbm` | INT | `telemetry.rssi_dbm` |
 | `irrigation_active` | BOOLEAN | `flags.irrigation_active` |
+| `irrigation_mm` | DOUBLE | `measurements.irrigation.applied_mm` (flow meter, depth applied in the interval) |
 | `kafka_partition`, `kafka_offset` | INT, BIGINT | Bronze lineage |
 | `_updated_at` | TIMESTAMP | Silver write time |
 
@@ -370,8 +395,9 @@ is updated to `done` when the field log arrives.
 | `status` | STRING | `planned` or `done` |
 | `details` | STRING (JSON) | e.g. `products_kg_ha` for fertiliser |
 
-Irrigation is not planned ahead. `done` irrigation rows can be derived from
-`fact_sensor_reading.irrigation_active` until a real log exists.
+Irrigation is not planned ahead. Until a real log exists, irrigation comes
+from the sensors (`fact_sensor_reading.irrigation_mm`) and reaches Gold as
+`feat_season_daily.irrigation_mm`.
 
 ### `fact_harvest`
 
@@ -401,49 +427,101 @@ Messages that fail parsing or data-quality checks.
 
 ## 9. Gold
 
+Built by `src/jobs/silver_to_gold.py` (task `gold_build`, last in both DAGs).
+Each run recomputes the Gold tables from Silver and replaces their content in
+one Iceberg commit; older versions stay reachable as snapshots. The checks of
+section 10 run before each write.
+
 ### `feat_season_daily`
 
-Grain: `season_id` × `date`, from `planting_date` to the harvest date.
+Grain: `season_id` × `date`, from `planting_date` to the harvest date (actual
+when logged, else expected). A daily root-zone water balance, FAO-56 chapter 8
+with the single crop coefficient (`src/lakehouse/gold.py`):
+
+- **ET0**: Penman-Monteith (`common.et0`) from the NASA POWER row of
+  `fact_weather_daily`, farm latitude from `dim_farm`, elevation 50 m.
+- **Kc, stage**: interpolated by DAS from `dim_growth_stage`.
+- **Root depth Zr**: 0.20 m at sowing, growing linearly to
+  `dim_crop.max_root_depth_low_m` (1.0 m, the low end for sandy soil and a
+  75-day season) at the start of mid-season.
+- **TAW** = 1000 (θFC − θWP) Zr with θ from the plot's `soil_texture`
+  (`common.soil`, FAO-56 table 19); **RAW** = p · TAW (`dim_crop`).
+- **Ks** = 1 while depletion ≤ RAW, then (TAW − Dr) / ((1 − p) TAW), from the
+  depletion at the start of the day.
+- **Depletion** Dr = Dr(yesterday) − effective rain − irrigation + ETa, kept
+  between 0 and TAW; water above field capacity drains (`deep_percolation_mm`).
+  The root zone starts at field capacity on the sowing day.
+- **Rain**: the plot's own gauges (sensor rain, averaged over its devices)
+  when at least 80 % of the expected readings arrived that day, else NASA
+  POWER. Rain below 0.2 · ET0 is not effective (it evaporates from the surface).
+- Sensor values are grouped by local day (`Asia/Ho_Chi_Minh`); a reading
+  belongs to the day its interval starts.
 
 | Column | Type | Description |
 | --- | --- | --- |
 | `season_id`, `date` | STRING, DATE | Key |
+| `farm_id`, `plot_id` | STRING | For maps and regional views |
 | `das` | INT | Days after sowing |
-| `stage` | STRING | From `dim_growth_stage` |
-| `kc` | DOUBLE | Kc interpolated by DAS |
-| `et0_mm` | DOUBLE | FAO-56 Penman-Monteith from `fact_weather_daily` |
-| `etc_mm` | DOUBLE | `et0_mm` × `kc` × `ks` |
-| `precip_mm` | DOUBLE | Daily rain |
-| `effective_precip_mm` | DOUBLE | Rain the crop can use |
-| `irrigation_mm` | DOUBLE | Applied irrigation |
-| `vwc_mean_pct`, `vwc_min_pct` | DOUBLE | Plot sensor aggregates |
-| `depletion_mm` | DOUBLE | Root-zone depletion (water balance) |
+| `stage`, `kc` | STRING, DOUBLE | From `dim_growth_stage` |
+| `root_depth_m` | DOUBLE | Zr |
+| `et0_mm` | DOUBLE | Reference ET |
+| `etc_mm` | DOUBLE | Crop water need, Kc · ET0 |
 | `ks` | DOUBLE | Water-stress coefficient (0–1) |
-| `gdd` | DOUBLE | Growing degree days |
-| `leaf_wet_hours` | DOUBLE | Hours with wet leaves |
+| `eta_mm` | DOUBLE | Actual ET, Ks · ETc |
+| `precip_mm`, `rain_source` | DOUBLE, STRING | Rain used in the balance and where it came from (`sensor`, `nasa_power`) |
+| `nasa_precip_mm`, `sensor_rain_mm` | DOUBLE | Both rain values, for comparison |
+| `effective_precip_mm` | DOUBLE | Rain counted in the balance |
+| `irrigation_mm`, `irrigation_hours` | DOUBLE | From the sensors' flow meters |
+| `taw_mm`, `raw_mm` | DOUBLE | Total and readily available water |
+| `depletion_mm`, `depletion_pct_taw` | DOUBLE | Root-zone depletion at the end of the day |
+| `deep_percolation_mm` | DOUBLE | Water drained below the root zone |
+| `tmin_c`, `tmax_c` | DOUBLE | NASA POWER |
+| `gdd`, `gdd_cum` | DOUBLE | Growing degree days, base 10 °C, and their season total |
+| `vwc_mean_pct`, `vwc_min_pct`, `vwc_max_pct` | DOUBLE | Plot sensors |
 | `soil_oxygen_min_pct` | DOUBLE | Lowest soil O₂ |
-| `heat_stress_flag`, `waterlog_flag` | BOOLEAN | Daily stress flags |
+| `leaf_wet_hours` | DOUBLE | Hours with wet leaves |
+| `sensor_coverage_pct` | DOUBLE | Readings received / expected |
+| `water_stress_flag` | BOOLEAN | `ks` < 1 |
+| `heat_stress_flag` | BOOLEAN | `tmax_c` ≥ 35 °C |
+| `waterlog_flag` | BOOLEAN | `soil_oxygen_min_pct` < 10 % |
+| `weather_complete` | BOOLEAN | The day had every input of ET0 |
 
-The ET0, Kc and soil water functions already exist in `src/common/`
-(`et0.py`, `crop.py`, `soil.py`).
+The 35 °C, 10 % O₂, 10 °C base, 0.20 m and 50 m values are assumptions (the
+grower's guide gives none); they are constants in `src/lakehouse/gold.py`.
 
 ### `agg_season_summary`
 
-Grain: `season_id`. The training table for yield models.
+Grain: `season_id`. Season totals from `feat_season_daily`; later also the
+training table for yield models, once `fact_harvest` exists.
 
 | Column | Type | Description |
 | --- | --- | --- |
 | `season_id` | STRING, PK | Season |
-| `precip_total_mm`, `irrigation_total_mm`, `etc_total_mm` | DOUBLE | Season totals |
-| `stress_days_flowering` | INT | Days with `ks` < 1 during flowering |
-| `waterlog_days` | INT | Days with `waterlog_flag` |
-| `rain_mm_harvest_window` | DOUBLE | Rain from harvest to the end of drying |
+| `farm_id`, `plot_id`, `planting_date`, `harvest_date` | | Season context |
+| `status` | STRING | `completed` when every day had weather, else `in_progress` |
+| `days`, `days_weather_complete` | INT | Days in the balance |
+| `precip_total_mm`, `effective_precip_total_mm`, `irrigation_total_mm` | DOUBLE | Water in |
+| `irrigation_events` | INT | Days with irrigation |
+| `etc_total_mm`, `eta_total_mm`, `eta_etc_ratio` | DOUBLE | Crop need, use and their ratio (input of the FAO-33 yield response) |
+| `deep_percolation_total_mm` | DOUBLE | Water lost below the roots |
+| `water_stress_days`, `stress_days_flowering` | INT | Days with `ks` < 1, overall and in mid-season (flowering) |
+| `waterlog_days`, `heat_stress_days` | INT | Days with those flags |
+| `rain_mm_harvest_window` | DOUBLE | NASA rain from harvest to 8 days after (bundles standing, sun drying) |
 | `gdd_total` | DOUBLE | Season GDD |
-| `yield_kg_ha` | DOUBLE, nullable | From `fact_harvest` |
-| `wue_kg_m3` | DOUBLE, nullable | Water use efficiency |
+| `vwc_mean_pct`, `sensor_coverage_pct` | DOUBLE | Sensor averages |
 
-`wue_kg_m3` contains the yield, so it is a post-season KPI only and must not
-be used as a feature to predict the same season's yield.
+### `agg_region_daily`
+
+Grain: `province` × `date`. How the farms of a province are doing on a day.
+
+| Column | Type | Description |
+| --- | --- | --- |
+| `province`, `date` | STRING, DATE | Key |
+| `farms_active`, `seasons_active` | INT | Farms and seasons in the field that day |
+| `farms_water_stress`, `farms_waterlogged`, `farms_heat_stress` | INT | Farms with the flag |
+| `avg_depletion_pct_taw`, `max_depletion_pct_taw` | DOUBLE | Root-zone depletion across farms |
+| `avg_et0_mm`, `avg_precip_mm`, `max_precip_mm` | DOUBLE | Weather across farms |
+| `avg_vwc_mean_pct` | DOUBLE | Soil moisture across farms |
 
 ### `alert_event`
 
@@ -474,7 +552,9 @@ Grain: `season_id` × `predicted_at`.
 | `yield_low_kg_ha`, `yield_high_kg_ha` | DOUBLE | Prediction interval |
 
 The FAO-33 baseline is Ya/Ym = 1 − Ky (1 − ETa/ETc); an ML model replaces it
-once `fact_harvest` covers several seasons.
+once `fact_harvest` covers several seasons. Not built in the PoC: the platform
+monitors the growing regions; `agg_season_summary` already holds ETa/ETc and
+the stress counts such a model would use.
 
 ## 10. Data quality checks
 
@@ -507,6 +587,15 @@ the rule):
 | `vwc_pct` 0–60; `rh_pct` 0–100; `air_temp_c` 5–50; `water_potential_kpa` < 0; `battery_pct` 0–100 | no |
 | `device_id` exists in `dim_device` (skipped until `dim_device` exists) | no |
 | No duplicate (`device_id`, `ts`): later duplicates are dropped, not quarantined | no |
+
+Gold tables (`src/lakehouse/gold.py`; also primary key and `season_id` in
+`dim_season`):
+
+| Table | Error checks | Warnings |
+| --- | --- | --- |
+| `feat_season_daily` | DAS ≥ 0; Kc 0–2; Ks 0–1; ET0 0–15 mm; ETa ≤ ETc; depletion between 0 and TAW | a day without complete weather |
+| `agg_season_summary` | totals ≥ 0; ETa/ETc 0–1; known status | |
+| `agg_region_daily` | flagged farms ≤ active farms | |
 
 Planned for the next layers:
 

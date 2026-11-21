@@ -183,6 +183,26 @@ def parse_dim_growth_stage(payload, partitions):
     return rows
 
 
+def parse_dim_crop(payload, partitions):
+    """Crop constants of the FAO reference that the Gold water balance needs."""
+    if partitions.get("reference_type") != "fao":
+        return []
+    kc = payload["kc_coefficients"]
+    roots = payload.get("root_depth_m") or {}
+    return [{
+        "crop_id": payload.get("crop_id") or partitions.get("crop"),
+        "crop_name": payload.get("crop_name"),
+        "season_length_days": sum(payload["growth_stages_days"].values()),
+        "kc_ini": kc["kc_ini"],
+        "kc_mid": kc["kc_mid"],
+        "kc_end": kc["kc_end"],
+        "max_root_depth_low_m": roots.get("min"),
+        "max_root_depth_high_m": roots.get("max"),
+        "depletion_fraction_p": payload.get("water_depletion_fraction"),
+        "max_crop_height_m": payload.get("max_crop_height_m"),
+    }]
+
+
 # ---- soilgrids -> dim_soil_layer --------------------------------------------------------
 
 SOIL_PROPERTIES = {  # SoilGrids layer name -> Silver column
@@ -316,6 +336,16 @@ TABLES = {t.name: t for t in (
                  ("kc_end", "DOUBLE")),
         checks=(Check("stage has days", "das_end > das_start"),
                 Check("Kc in range", "kc_start BETWEEN 0 AND 2 AND kc_end BETWEEN 0 AND 2")),
+    ),
+    SilverTable(
+        name="dim_crop", source="reference", keys=("crop_id",), parse=parse_dim_crop,
+        columns=(("crop_id", "STRING"), ("crop_name", "STRING"), ("season_length_days", "INT"),
+                 ("kc_ini", "DOUBLE"), ("kc_mid", "DOUBLE"), ("kc_end", "DOUBLE"),
+                 ("max_root_depth_low_m", "DOUBLE"), ("max_root_depth_high_m", "DOUBLE"),
+                 ("depletion_fraction_p", "DOUBLE"), ("max_crop_height_m", "DOUBLE")),
+        checks=(Check("p between 0 and 1", "depletion_fraction_p > 0 AND depletion_fraction_p < 1"),
+                Check("root depth plausible", "max_root_depth_low_m BETWEEN 0.2 AND 3 "
+                                              "AND max_root_depth_low_m <= max_root_depth_high_m")),
     ),
     SilverTable(
         name="dim_soil_layer", source="soilgrids", keys=("farm_id", "depth", "source"),

@@ -163,6 +163,10 @@ services:
       - spark.cores.max=1
       - --conf
       - spark.executor.memory=768m
+      # Small micro-batches: 4 shuffle partitions, not Spark's 200 (streaming
+      # cannot coalesce them). Spark keeps this value in the query checkpoint.
+      - --conf
+      - spark.sql.shuffle.partitions=4
       - --driver-memory
       - 768m
       - /opt/spark-jobs/sensor_stream.py
