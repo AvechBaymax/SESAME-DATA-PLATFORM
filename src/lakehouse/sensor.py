@@ -88,7 +88,9 @@ RULES = (
      "cast(m.measurements.weather_micro.humidity_pct AS STRING)", False),
     ("air_temp_c 5-50", "m.measurements.weather_micro.ambient_temp_c BETWEEN 5 AND 50",
      "cast(m.measurements.weather_micro.ambient_temp_c AS STRING)", False),
-    ("water_potential_kpa < 0", "m.measurements.soil.water_potential_kpa < 0",
+    # Matric potential is 0 in saturated soil (waterlogging after heavy rain) and
+    # negative otherwise; only a positive value is impossible.
+    ("water_potential_kpa <= 0", "m.measurements.soil.water_potential_kpa <= 0",
      "cast(m.measurements.soil.water_potential_kpa AS STRING)", False),
     ("battery_pct 0-100", "m.telemetry.battery_pct BETWEEN 0 AND 100",
      "cast(m.telemetry.battery_pct AS STRING)", False),

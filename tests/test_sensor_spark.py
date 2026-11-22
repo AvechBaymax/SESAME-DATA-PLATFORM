@@ -91,3 +91,13 @@ def test_reading_columns_follow_the_message(spark):
     assert r["air_temp_c"] == m["measurements"]["weather_micro"]["ambient_temp_c"]
     assert r["irrigation_active"] == m["flags"]["irrigation_active"]
     assert r["kafka_offset"] == 0
+
+
+def test_saturated_soil_is_a_valid_reading_but_positive_potential_is_not(spark):
+    saturated, impossible = messages(2)
+    saturated["measurements"]["soil"]["water_potential_kpa"] = -0.0   # what the simulator sends when saturated
+    impossible["measurements"]["soil"]["water_potential_kpa"] = 5.0
+    readings, rejected = classify(spark, kafka_rows(spark, [(json.dumps(saturated).encode(), None),
+                                                            (json.dumps(impossible).encode(), None)]))
+    assert readings.count() == 1
+    assert [r["dq_rule"] for r in rejected.collect()] == ["water_potential_kpa <= 0"]

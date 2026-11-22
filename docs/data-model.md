@@ -584,7 +584,7 @@ the rule):
 | --- | --- |
 | `valid_json` | yes |
 | `required_fields`: `device_id`, `timestamp`, `soil`, `canopy`, `weather_micro` present | yes |
-| `vwc_pct` 0–60; `rh_pct` 0–100; `air_temp_c` 5–50; `water_potential_kpa` < 0; `battery_pct` 0–100 | no |
+| `vwc_pct` 0–60; `rh_pct` 0–100; `air_temp_c` 5–50; `water_potential_kpa` ≤ 0 (0 in saturated soil); `battery_pct` 0–100 | no |
 | `device_id` exists in `dim_device` (skipped until `dim_device` exists) | no |
 | No duplicate (`device_id`, `ts`): later duplicates are dropped, not quarantined | no |
 
