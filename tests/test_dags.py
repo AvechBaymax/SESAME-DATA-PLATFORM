@@ -61,6 +61,11 @@ def test_gold_runs_after_every_silver_task(dagbag):
     assert all(t.conf["spark.sql.shuffle.partitions"] == "4" for t in spark_tasks)
 
 
+def test_serving_export_runs_after_gold(dagbag):
+    for dag_id in ("sesame_poc_bootstrap", "sesame_ingest_daily"):
+        assert upstream(dagbag.dags[dag_id], "serving_export") == {"gold_build"}
+
+
 def test_daily_dag_takes_nasa_to_silver(dagbag):
     dag = dagbag.dags["sesame_ingest_daily"]
     assert upstream(dag, "silver_nasa_power") == {"bronze_nasa_power"}

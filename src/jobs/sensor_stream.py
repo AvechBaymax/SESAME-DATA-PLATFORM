@@ -27,7 +27,7 @@ import time
 from pyspark.sql import Window
 from pyspark.sql import functions as F
 
-from lakehouse import sensor
+from lakehouse import sensor, serving
 from lakehouse.spark import create_or_evolve_table, ensure_namespace, get_spark
 from lakehouse.tables import table
 
@@ -146,6 +146,35 @@ def send_to_dlq(rejected, broker, topic):
     return rows.count()
 
 
+def write_recent(spark, readings, jdbc):
+    """Copy the batch's readings to serving.sensor_recent for the web app (last 7 days of data).
+
+    The batch lands in a stage table, then one INSERT ... ON CONFLICT DO NOTHING
+    moves it, so a replayed batch adds nothing. Postgres being down must not stop
+    the lakehouse stream, so a failure is logged and the batch goes on.
+    """
+    if jdbc is None:
+        return "serving off"
+    columns = serving.TABLES["sensor_recent"].column_names
+    try:
+        (readings.select(*columns).write.format("jdbc").mode("overwrite").option("truncate", "true")
+         .option("url", jdbc["url"]).option("dbtable", serving.SENSOR_STAGE).option("user", jdbc["user"])
+         .option("password", jdbc["password"]).option("driver", jdbc["driver"]).save())
+        jvm = spark.sparkContext._jvm
+        jvm.java.lang.Class.forName(jdbc["driver"])
+        conn = jvm.java.sql.DriverManager.getConnection(jdbc["url"], jdbc["user"], jdbc["password"])
+        try:
+            statement = conn.createStatement()
+            for query in serving.recent_upsert_sql():
+                statement.executeUpdate(query)
+        finally:
+            conn.close()
+        return "serving updated"
+    except Exception as exc:  # noqa: BLE001 - serving is a copy; keep the stream going
+        print(f"[sensor_silver] serving.sensor_recent not updated: {exc}")
+        return "serving failed"
+
+
 def process_batch(args):
     def handle(batch_df, batch_id):
         # foreachBatch runs on a cloned session: temp views must live in that one
@@ -161,10 +190,11 @@ def process_batch(args):
         merge_new(spark, readings, READINGS, sensor.READING_KEYS, "sensor_readings_batch")
         merge_new(spark, rejected, QUARANTINE, sensor.QUARANTINE_KEYS, "sensor_quarantine_batch")
         dlq = send_to_dlq(rejected, args.broker, args.dlq_topic)
+        recent = write_recent(spark, readings, serving.jdbc_settings())
         by_rule = {r["dq_rule"]: r["count"] for r in rejected.groupBy("dq_rule").count().collect()}
         print(f"[sensor_silver] batch {batch_id}: {batch_df.count()} message(s), "
               f"{readings.count()} reading(s), {sum(by_rule.values())} quarantined {by_rule}, "
-              f"{dlq} to DLQ, {time.monotonic() - started:.1f} s")
+              f"{dlq} to DLQ, {recent}, {time.monotonic() - started:.1f} s")
         for df in (readings, rejected, batch_df):
             df.unpersist()
     return handle

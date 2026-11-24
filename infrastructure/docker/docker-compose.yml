@@ -9,6 +9,14 @@ x-minio-credentials: &minio-credentials
   AWS_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY}
   AWS_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY}
 
+x-serving: &serving-env
+  # Serving layer (Postgres database shared with the web app; see lakehouse/serving.py).
+  # Local development passwords; set real ones in .env for anything shared.
+  SERVING_DB: sesame
+  SERVING_JDBC_URL: jdbc:postgresql://postgres:5432/sesame
+  SERVING_DB_USER: data_platform
+  SERVING_DB_PASSWORD: ${SERVING_DB_PASSWORD:-data_platform_dev}
+
 x-spark-common: &spark-common
   build:
     context: ../..
@@ -30,7 +38,7 @@ x-airflow-common: &airflow-common
   image: sesame-airflow:2.10.5
   user: "${AIRFLOW_UID:-50000}:0"
   environment: &airflow-env
-    <<: *minio-credentials
+    <<: [*minio-credentials, *serving-env]
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
@@ -48,6 +56,7 @@ x-airflow-common: &airflow-common
     ICEBERG_CATALOG_DB: iceberg_catalog
     KAFKA_BROKER: kafka:29092
     OWM_API_KEY: ${OWM_API_KEY:-}
+    WEB_DB_PASSWORD: ${WEB_DB_PASSWORD:-web_app_dev}
   volumes:
     - ../../dags:/opt/airflow/dags
     - ../../logs:/opt/airflow/logs
@@ -171,7 +180,7 @@ services:
       - 768m
       - /opt/spark-jobs/sensor_stream.py
     environment:
-      <<: *spark-env
+      <<: [*spark-env, *serving-env]
       KAFKA_BROKER: kafka:29092
       SENSOR_CHECKPOINT_DIR: /opt/spark/work-dir/checkpoints
       # Executors connect back to the driver running in this container
@@ -193,6 +202,8 @@ services:
         condition: service_started
       postgres:
         condition: service_healthy
+      airflow-init:   # creates the serving tables the stream writes sensor_recent into
+        condition: service_completed_successfully
     restart: unless-stopped
 
   # ---------------- Airflow ----------------
@@ -203,6 +214,10 @@ services:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
       POSTGRES_DB: airflow
+    ports:
+      # For the web app's backend on the host (database sesame, login web_app);
+      # 5433 so it does not clash with a Postgres already running on the host
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       # Creates the Iceberg JDBC catalog database on a fresh volume
@@ -223,6 +238,7 @@ services:
       - |
         python -m common.init_buckets &&
         python -m common.init_catalog &&
+        python -m common.init_serving &&
         airflow db migrate &&
         airflow pools set spark 1 "Spark jobs run one at a time on the single worker" &&
         airflow users create \

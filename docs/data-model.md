@@ -574,6 +574,30 @@ once `fact_harvest` covers several seasons. Not built in the PoC: the platform
 monitors the growing regions; `agg_season_summary` already holds ETa/ETc and
 the stress counts such a model would use.
 
+## 9b. Serving (Postgres, for the web app)
+
+The web app reads Postgres database `sesame`, schema `serving`, written by the
+data platform (role `data_platform`; the web app's role `web_app` may only
+read). Definitions in `src/lakehouse/serving.py`; `python -m
+common.init_serving --print-ddl` prints the DDL.
+
+- Copies of Gold and Silver (`season_daily`, `region_daily`, `season_summary`,
+  `alerts`, `field_operations`, `soil_layers`) keep the lakehouse column names.
+- `farm_status` (one row per plot) and `season_info` describe a day (today, or
+  `--as-of` for demos): the stage, the depletion and a `status_color`
+  (`alert` when a critical alert is open, else `waterlogged`, `water_stress` or
+  `normal`).
+- `weather_daily` puts NASA POWER and the plots' own sensors side by side.
+- `sensor_recent` (last 7 days of readings) is written by the sensor stream
+  through an unlogged stage table and `INSERT … ON CONFLICT DO NOTHING`, so a
+  replayed batch adds nothing; `device_health` is a view on it.
+- The batch tables are replaced after each `gold_build` (`serving_export`,
+  JDBC truncate and insert); the web app may briefly see an empty table while
+  one is being refilled.
+
+Schema `app` belongs to the web app (`web_app`); the data platform only reads
+it, to bring what users enter back into the lakehouse.
+
 ## 10. Data quality checks
 
 Implemented for the batch Silver tables in `src/lakehouse/quality.py` (plain

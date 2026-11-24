@@ -17,7 +17,7 @@ from airflow.models.param import Param
 from airflow.utils.task_group import TaskGroup
 
 from common.farm import DEMO_FARMS, farm_cli_args
-from sesame_tasks import bronze, gold, python_module, silver
+from sesame_tasks import bronze, gold, python_module, serving_export, silver
 
 with DAG(
     dag_id="sesame_poc_bootstrap",
@@ -56,4 +56,4 @@ with DAG(
     soils >> bronze("soilgrids", "all_done") >> soil_layers
     weathers >> bronze("nasa_power", "all_done") >> weather_daily
     farm_dims >> [field_operations, soil_layers]  # their foreign keys point at the farm dimensions
-    [farm_dims, field_operations, soil_layers, crop_reference, weather_daily] >> gold()
+    [farm_dims, field_operations, soil_layers, crop_reference, weather_daily] >> gold() >> serving_export()

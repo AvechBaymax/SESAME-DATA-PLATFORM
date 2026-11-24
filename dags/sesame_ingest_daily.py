@@ -13,7 +13,7 @@ from airflow.operators.bash import BashOperator
 from airflow.utils.task_group import TaskGroup
 
 from common.farm import DEMO_FARMS
-from sesame_tasks import bronze, gold, python_module, silver
+from sesame_tasks import bronze, gold, python_module, serving_export, silver
 
 with DAG(
     dag_id="sesame_ingest_daily",
@@ -36,5 +36,5 @@ with DAG(
                              f"python -m mock_iot.owm_ingest {location}",
             ))
     # Gold also picks up the sensor readings streamed in since the last run
-    nasa >> bronze("nasa_power", "all_done") >> silver("nasa_power") >> gold()
+    nasa >> bronze("nasa_power", "all_done") >> silver("nasa_power") >> gold() >> serving_export()
     owm >> bronze("owm")  # skipped when every farm's OWM task was skipped (no key)

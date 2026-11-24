@@ -62,6 +62,7 @@ docker exec spark-master /opt/spark/bin/spark-submit \
 | RustFS console | http://localhost:9001 |
 | Kafka (from the host) | localhost:9092 |
 | Sensor stream (Spark UI, Structured Streaming tab) | http://localhost:4040 |
+| Serving database for the web app (Postgres) | localhost:5433, database `sesame` |
 
 The Postgres user and password (`airflow` / `airflow`) and the Airflow admin
 login are local development defaults; production uses separate secrets.
@@ -276,6 +277,47 @@ docker exec spark-master /opt/spark/bin/spark-sql --master spark://spark-master:
   FROM lakehouse.gold.agg_season_summary ORDER BY 1;
   SELECT farm_id, rule, severity, start_date, days, message
   FROM lakehouse.gold.alert_event WHERE rule <> 'operation_due' ORDER BY farm_id, start_date;" 2>/dev/null
+```
+
+## Serving layer for the web app (PoC)
+
+The web app reads Postgres, never the lakehouse. On the stack's Postgres
+service, database `sesame` (created by `airflow-init`, `python -m common.init_serving`):
+
+| Schema | Owner (writes) | Reads | Holds |
+| --- | --- | --- | --- |
+| `serving` | `data_platform` | `web_app` | Tables for the dashboard, filled by the data platform |
+| `app` | `web_app` | `data_platform` | The web app's own tables (users, farms entered on the web, acknowledgements) |
+
+Connect from the web backend on the host with `localhost:5433`, database
+`sesame`, user `web_app`, password `web_app_dev` (set `WEB_DB_PASSWORD` and
+`SERVING_DB_PASSWORD` in `.env` for anything shared). The full DDL:
+
+```bash
+docker exec airflow-scheduler python -m common.init_serving --print-ddl
+```
+
+| Table | One row per | Filled |
+| --- | --- | --- |
+| `farm_status` | plot: latest season and its state (stage, depletion, `status_color`: normal / water_stress / waterlogged / alert) | after `gold_build` |
+| `region_daily` | province and day | after `gold_build` |
+| `season_info`, `season_daily`, `season_summary` | season; season and day (water balance, sensors, flags) | after `gold_build` |
+| `weather_daily` | farm, day and source (`nasa_power`, `sensor`) | after `gold_build` |
+| `field_operations`, `soil_layers` | operation; farm and soil layer | after `gold_build` |
+| `alerts` | alert (`gold.alert_event`) | after `gold_build` |
+| `data_quality_daily` | day and data-quality rule | after `gold_build` |
+| `sensor_recent` | 15-minute reading, last 7 days of data | by the sensor stream, each micro-batch |
+| `device_health` (view) | device: last reading, battery, signal, 24-hour coverage | live, from `sensor_recent` |
+
+Task `serving_export` (`src/jobs/gold_to_serving.py`) runs after `gold_build` in
+both DAGs. The demo season is in the past, so for a demo show it as if it were
+still in the field:
+
+```bash
+docker exec -e SERVING_JDBC_URL=jdbc:postgresql://postgres:5432/sesame -e SERVING_DB_USER=data_platform \
+    -e SERVING_DB_PASSWORD=data_platform_dev spark-master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 --conf spark.sql.shuffle.partitions=4 \
+    /opt/spark-jobs/gold_to_serving.py --as-of 2026-01-10
 ```
 
 ## Sesame farm monitoring dashboard

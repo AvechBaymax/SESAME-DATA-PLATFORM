@@ -57,3 +57,8 @@ def gold():
     Silver tables that did update, and the failed task stays red.
     """
     return spark_job("gold_build", "silver_to_gold.py", trigger_rule="all_done")
+
+
+def serving_export():
+    """Refresh the Postgres serving tables the web app reads (after gold_build)."""
+    return spark_job("serving_export", "gold_to_serving.py")
