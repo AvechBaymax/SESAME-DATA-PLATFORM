@@ -235,5 +235,22 @@ AGG_REGION_DAILY = GoldTable(
                                        "AND farms_waterlogged <= farms_active"),),
 )
 
-TABLES = {t.name: t for t in (FEAT_SEASON_DAILY, AGG_SEASON_SUMMARY, AGG_REGION_DAILY)}
+ALERT_EVENT = GoldTable(
+    name="alert_event", keys=("alert_id",),
+    columns=(
+        ("alert_id", "STRING"), ("season_id", "STRING"), ("farm_id", "STRING"), ("plot_id", "STRING"),
+        ("device_id", "STRING"), ("rule", "STRING"), ("severity", "STRING"), ("start_date", "DATE"),
+        ("end_date", "DATE"), ("days", "INT"), ("ongoing", "BOOLEAN"), ("value", "DOUBLE"),
+        ("threshold", "DOUBLE"), ("unit", "STRING"), ("message", "STRING"), ("_updated_at", "TIMESTAMP"),
+    ),
+    checks=(
+        Check("known severity", "severity IN ('info', 'warning', 'critical')"),
+        Check("end on or after start", "end_date >= start_date"),
+        Check("days match the dates", "days BETWEEN 1 AND datediff(end_date, start_date) + 1"),
+        Check("message present", "length(message) > 0"),
+    ),
+    references=(("season_id", "dim_season", "season_id"),),
+)
+
+TABLES = {t.name: t for t in (FEAT_SEASON_DAILY, AGG_SEASON_SUMMARY, AGG_REGION_DAILY, ALERT_EVENT)}
 

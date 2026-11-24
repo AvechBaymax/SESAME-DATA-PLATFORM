@@ -125,6 +125,26 @@ def parse_nasa_power(payload):
     return records
 
 
+class StormWeather:
+    """Daily drivers with extra rain added on some days (a local storm).
+
+    Wet-day adjustments as in the climatology: cooler, more humid, less sun.
+    """
+
+    def __init__(self, daily_source, extra_rain_mm):
+        self.daily_source = daily_source
+        self.extra_rain_mm = dict(extra_rain_mm)   # {date: mm}
+
+    def daily(self, day):
+        base = self.daily_source.daily(day)
+        extra = self.extra_rain_mm.get(day, 0.0)
+        if not extra:
+            return base
+        return replace(base, precip_mm=round(base.precip_mm + extra, 1),
+                       tmax_c=round(base.tmax_c - 1.5, 1), rh_pct=min(base.rh_pct + 8, 98.0),
+                       rs_mj_m2=round(base.rs_mj_m2 * 0.6, 2), source=f"{base.source}+storm")
+
+
 @dataclass(frozen=True)
 class RainEvent:
     start: datetime

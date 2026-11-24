@@ -1,7 +1,7 @@
 # Sesame Data Platform: Data Model
 
 Status: November 2026. Landing, Bronze and Silver (batch and the sensor
-stream) and the Gold water-balance tables are built. `alert_event` is next;
+stream) and Gold (water balance, summaries, alerts) are built.
 `yield_prediction` stays a design and is not built in the PoC.
 Stack: RustFS object storage (S3 API), Apache Iceberg tables in a JDBC
 catalog on Postgres, Apache Spark for both batch and Structured Streaming.
@@ -525,20 +525,38 @@ Grain: `province` × `date`. How the farms of a province are doing on a day.
 
 ### `alert_event`
 
-Grain: `season_id` × `ts` × `rule`.
+Grain: one alert = one rule broken on consecutive days (an episode), so a
+10-day drought is one alert. Built by `silver_to_gold.py` with the other Gold
+tables; the rules live in `src/lakehouse/alerts.py`.
 
 | Column | Type | Description |
 | --- | --- | --- |
-| `season_id`, `ts`, `rule` | STRING, TIMESTAMP, STRING | Key |
-| `severity` | STRING | `info`, `warning`, `critical` |
-| `value`, `threshold` | DOUBLE | Measured value and the limit it crossed |
-| `message` | STRING | Text sent to Slack and the dashboard |
-| `acknowledged` | BOOLEAN | Set by the user |
+| `alert_id` | STRING, PK | Stable hash of season, rule, device and start date (the web app stores acknowledgements against it) |
+| `season_id`, `farm_id`, `plot_id` | STRING | Where |
+| `device_id` | STRING, nullable | For device alerts (battery) |
+| `rule`, `severity` | STRING | See below; `info`, `warning`, `critical` |
+| `start_date`, `end_date`, `days` | DATE, DATE, INT | The episode |
+| `ongoing` | BOOLEAN | Still true yesterday |
+| `value`, `threshold`, `unit` | DOUBLE, DOUBLE, STRING | Worst value of the episode and the limit it crossed |
+| `message` | STRING | Vietnamese text for the dashboard |
 
-Rules come from the grower's cultivation guide: waterlogging (high VWC or
-low soil O₂), drought at flowering (`ks` < 1 in `mid_season`), heavy rain at
-flowering or in the harvest window, and fertiliser or weeding due from
-`planned` operations.
+| Rule | Severity | Fires when | Source |
+| --- | --- | --- | --- |
+| `drought_flowering` | critical | Ks < 1 in mid-season (flowering); value = root-zone depletion at the start of the day, threshold = RAW | `feat_season_daily` |
+| `water_stress` | warning | Ks < 1 in the other stages | `feat_season_daily` |
+| `waterlogging` | critical | soil O₂ < 10 % | `feat_season_daily` (sensors) |
+| `heavy_rain_flowering` | warning | ≥ 30 mm/day in mid-season (assumption) | `feat_season_daily` |
+| `heat_stress` | warning | Tmax ≥ 35 °C (assumption) | `feat_season_daily` |
+| `low_sensor_coverage` | warning | < 50 % of the expected readings, between the plot's first and last sensor day | `feat_season_daily` |
+| `rain_harvest_window` | warning | ≥ 10 mm/day in the 8 days after harvest (assumption) | `fact_weather_daily` |
+| `battery_low` | warning | a device's battery < 20 % | `fact_sensor_reading` |
+| `operation_due` | info | a planned fertiliser, weeding or harvest falls due (one reminder on its date) | `fact_field_operation` |
+| `operation_overdue` | warning | still `planned` 3 days after its date, for a season still in the field | `fact_field_operation` |
+
+The grower's guide gives the reasons (no drought at flowering, sesame does
+not tolerate waterlogging, heavy rain hurts at flowering and harvest); it
+gives no numbers for heavy rain or heat, so those thresholds are assumptions.
+Acknowledging an alert is recorded by the web app (`app.alert_acks`), not here.
 
 ### `yield_prediction`
 
@@ -596,6 +614,7 @@ Gold tables (`src/lakehouse/gold.py`; also primary key and `season_id` in
 | `feat_season_daily` | DAS ≥ 0; Kc 0–2; Ks 0–1; ET0 0–15 mm; ETa ≤ ETc; depletion between 0 and TAW | a day without complete weather |
 | `agg_season_summary` | totals ≥ 0; ETa/ETc 0–1; known status | |
 | `agg_region_daily` | flagged farms ≤ active farms | |
+| `alert_event` | known severity; end ≥ start; `days` fits the dates; message present | |
 
 Planned for the next layers:
 

@@ -5,6 +5,9 @@
   3. gold.feat_season_daily: lakehouse.gold.water_balance() run per season, in date order
   4. gold.agg_season_summary: season totals from (3)
   5. gold.agg_region_daily: farms per province and day from (3)
+  6. gold.alert_event: the rules of lakehouse.alerts on (3), the weather after
+     harvest, the planned field operations and the sensors' battery, merged into
+     episodes of consecutive days
 
 Each table is recomputed from Silver and replaces the previous version in one
 Iceberg commit (older versions stay reachable through snapshots). Checks run
@@ -16,13 +19,15 @@ import sys
 
 from pyspark.sql import functions as F
 
-from lakehouse import gold, quality
+from pyspark.sql import Window
+
+from lakehouse import alerts, gold, quality
 from lakehouse.spark import create_or_evolve_table, ensure_namespace, get_spark, table_exists
 from lakehouse.tables import table
 
 SILVER = {name: table("silver", name) for name in
           ("dim_season", "dim_plot", "dim_farm", "dim_device", "dim_growth_stage", "dim_crop",
-           "fact_weather_daily", "fact_sensor_reading")}
+           "fact_weather_daily", "fact_sensor_reading", "fact_field_operation")}
 
 
 def silver_table(name):
@@ -160,6 +165,158 @@ def build_region(feat, season_df):
             .select(*gold.AGG_REGION_DAILY.column_names))
 
 
+# ---- alerts -----------------------------------------------------------------------------
+
+def _fill(template, decimals=0):
+    """Spark column: a message template with {value}, {threshold} and {days} filled in."""
+    text = F.lit(template)
+    for key in ("value", "threshold", "days"):
+        digits = decimals if key == "value" else 0
+        number = F.regexp_replace(F.format_number(F.col(key).cast("double"), digits), ",", "")
+        text = F.replace(text, F.lit("{" + key + "}"), F.coalesce(number, F.lit("")))
+    return text
+
+
+def daily_rule_hits(feat):
+    """One row per season, day and broken daily rule (lakehouse.alerts.DAILY_RULES)."""
+    # Days with no reading at all count as 0 % coverage, but only between a plot's
+    # first and last sensor day (a season without sensors is not an outage).
+    span = Window.partitionBy("season_id")
+    by_day = Window.partitionBy("season_id").orderBy("date")
+    # Ks is computed from the depletion at the start of the day (yesterday's end, 0 on sowing day)
+    start_depletion = F.coalesce(F.lag("depletion_mm").over(by_day), F.lit(0.0))
+    f = (feat.withColumn("depletion_start_pct_taw",
+                         100 * F.least(start_depletion, F.col("taw_mm")) / F.col("taw_mm"))
+             .withColumn("_first", F.min(F.when(F.col("sensor_coverage_pct").isNotNull(), F.col("date"))).over(span))
+             .withColumn("_last", F.max(F.when(F.col("sensor_coverage_pct").isNotNull(), F.col("date"))).over(span))
+             .withColumn("coverage_pct", F.when(F.col("sensor_coverage_pct").isNull()
+                                               & F.col("date").between(F.col("_first"), F.col("_last")), F.lit(0.0))
+                                          .otherwise(F.col("sensor_coverage_pct")))
+             .alias("f"))
+    hits = None
+    for rule in alerts.DAILY_RULES:
+        part = f.where(F.expr(rule.condition)).select(
+            "f.season_id", "f.farm_id", "f.plot_id", F.lit(None).cast("string").alias("device_id"), "f.date",
+            F.lit(rule.name).alias("rule"), F.lit(rule.severity).alias("severity"),
+            F.expr(rule.value).cast("double").alias("value"), F.expr(rule.threshold).cast("double").alias("threshold"),
+            F.lit(rule.unit).alias("unit"))
+        hits = part if hits is None else hits.unionByName(part)
+    return hits
+
+
+def harvest_rain_hits(season_df, weather):
+    severity, unit, _ = alerts.OTHER_RULES["rain_harvest_window"]
+    w = weather.where("source = 'nasa_power'").alias("w")
+    return (season_df.alias("s").join(
+                w, (F.col("w.farm_id") == F.col("s.farm_id"))
+                & F.col("w.date").between(F.date_add("s.harvest_date", 1),
+                                          F.date_add("s.harvest_date", gold.HARVEST_WINDOW_DAYS)))
+            .where(F.col("w.precip_mm") >= alerts.HARVEST_RAIN_MM)
+            .select("s.season_id", "s.farm_id", "s.plot_id", F.lit(None).cast("string").alias("device_id"),
+                    "w.date", F.lit("rain_harvest_window").alias("rule"), F.lit(severity).alias("severity"),
+                    F.col("w.precip_mm").alias("value"), F.lit(float(alerts.HARVEST_RAIN_MM)).alias("threshold"),
+                    F.lit(unit).alias("unit")))
+
+
+def battery_hits(readings, season_df):
+    severity, unit, _ = alerts.OTHER_RULES["battery_low"]
+    local_day = F.to_date(F.from_utc_timestamp("ts", gold.TIMEZONE))
+    low = (readings.groupBy("device_id", "plot_id", local_day.alias("date"))
+           .agg(F.min("battery_pct").alias("value"))
+           .where(F.col("value") < alerts.BATTERY_LOW_PCT).alias("b"))
+    return (low.join(season_df.alias("s"), (F.col("s.plot_id") == F.col("b.plot_id"))
+                     & F.col("b.date").between(F.col("s.planting_date"), F.col("s.harvest_date")))
+            .select("s.season_id", "s.farm_id", "s.plot_id", "b.device_id", "b.date",
+                    F.lit("battery_low").alias("rule"), F.lit(severity).alias("severity"), "b.value",
+                    F.lit(float(alerts.BATTERY_LOW_PCT)).alias("threshold"), F.lit(unit).alias("unit")))
+
+
+def episodes(hits):
+    """Merge consecutive days of the same rule (and device) into one alert."""
+    key = ["season_id", "rule", "device_id"]
+    order = Window.partitionBy(*key).orderBy("date")
+    rank = F.when(F.col("severity") == "critical", 3).when(F.col("severity") == "warning", 2).otherwise(1)
+    grouped = (hits.withColumn("_island", F.date_sub("date", F.row_number().over(order).cast("int")))
+               .withColumn("_rank", rank)
+               .groupBy(*key, "_island").agg(
+                   F.first("farm_id").alias("farm_id"), F.first("plot_id").alias("plot_id"),
+                   F.min("date").alias("start_date"), F.max("date").alias("end_date"),
+                   F.count("*").cast("int").alias("days"), F.max("_rank").alias("_rank"),
+                   F.min("value").alias("_min"), F.max("value").alias("_max"),
+                   F.first("threshold").alias("threshold"), F.first("unit").alias("unit")))
+    return (grouped
+            .withColumn("value", F.when(F.col("rule").isin(list(alerts.LOWER_IS_WORSE)), F.col("_min")).otherwise(F.col("_max")))
+            .withColumn("severity", F.when(F.col("_rank") == 3, "critical")
+                                     .when(F.col("_rank") == 2, "warning").otherwise("info"))
+            .drop("_island", "_rank", "_min", "_max"))
+
+
+def operation_alerts(operations, season_df):
+    """Reminders on the planned date, and overdue warnings for seasons still in the field."""
+    ops = (operations.where("status = 'planned' AND op_type IN ('fertilizer', 'weed_control', 'harvest')")
+           .alias("o").join(season_df.alias("s"), "season_id"))
+    def lookup(mapping, column):
+        return F.element_at(F.create_map(*[F.lit(x) for kv in mapping.items() for x in kv]), column)
+
+    application = F.get_json_object("o.details", "$.application")
+    op_name = F.coalesce(F.when(F.col("o.op_type") == "fertilizer", lookup(alerts.FERTILIZER_APPLICATIONS, application)),
+                         lookup(alerts.OPERATION_NAMES, F.col("o.op_type")))
+    products = F.from_json(F.get_json_object("o.details", "$.products_kg_ha"), "map<string,double>")
+    product_text = F.array_join(F.transform(F.map_entries(products), lambda e: F.concat(
+        F.coalesce(lookup(alerts.FERTILIZER_PRODUCTS, e["key"]), e["key"]), F.lit(" "),
+        F.regexp_replace(F.format_number(e["value"], 1), ",", ""), F.lit(" kg/ha"))), ", ")
+    details = (F.when(F.col("o.op_type") == "fertilizer", product_text)
+                .when(F.col("o.op_type") == "harvest", F.lit(alerts.HARVEST_SIGN))
+                .otherwise(F.lit("")))
+    due = ops.select(
+        "season_id", "s.farm_id", "s.plot_id", F.lit(None).cast("string").alias("device_id"),
+        F.lit("operation_due").alias("rule"), F.lit("info").alias("severity"),
+        F.col("o.planned_date").alias("start_date"), F.col("o.planned_date").alias("end_date"),
+        F.lit(1).alias("days"), F.lit(None).cast("double").alias("value"),
+        F.lit(None).cast("double").alias("threshold"), F.lit("").alias("unit"),
+        F.concat(F.lit("Đến hạn "), op_name, F.lit(" (ngày "), F.col("o.das").cast("string"),
+                 F.lit(" sau gieo)"), F.when(F.coalesce(details, F.lit("")) != "", F.concat(F.lit(": "), details)).otherwise(F.lit("")),
+                 F.lit(".")).alias("message"),
+        F.concat_ws("|", "season_id", F.lit("operation_due"), "o.operation_id").alias("_id_key"))
+    late = F.datediff(F.current_date(), F.col("o.planned_date"))
+    overdue = (ops.where((F.col("s.harvest_date") >= F.current_date()) & (late > alerts.OVERDUE_DAYS))
+               .select(
+                   "season_id", "s.farm_id", "s.plot_id", F.lit(None).cast("string").alias("device_id"),
+                   F.lit("operation_overdue").alias("rule"), F.lit("warning").alias("severity"),
+                   F.date_add("o.planned_date", alerts.OVERDUE_DAYS + 1).alias("start_date"),
+                   F.current_date().alias("end_date"), (late - alerts.OVERDUE_DAYS).cast("int").alias("days"),
+                   late.cast("double").alias("value"), F.lit(float(alerts.OVERDUE_DAYS)).alias("threshold"),
+                   F.lit("ngày").alias("unit"),
+                   F.concat(F.lit("Quá hạn "), op_name, F.lit(" "), late.cast("string"),
+                            F.lit(" ngày mà chưa ghi nhận thực hiện.")).alias("message"),
+                   F.concat_ws("|", "season_id", F.lit("operation_overdue"), "o.operation_id").alias("_id_key")))
+    return due.unionByName(overdue)
+
+
+def build_alerts(feat, season_df, weather, operations=None, readings=None):
+    hits = daily_rule_hits(feat).unionByName(harvest_rain_hits(season_df, weather))
+    if readings is not None:
+        hits = hits.unionByName(battery_hits(readings, season_df))
+    templates = {r.name: (r.message, r.decimals) for r in alerts.DAILY_RULES}
+    templates.update({k: (v[2], 0) for k, v in alerts.OTHER_RULES.items()})
+    message = F.lit(None).cast("string")
+    for name, (template, decimals) in templates.items():
+        message = F.when(F.col("rule") == name, _fill(template, decimals)).otherwise(message)
+    eps = (episodes(hits)
+           .withColumn("message", F.replace(message, F.lit("{device}"), F.coalesce("device_id", F.lit(""))))
+           .withColumn("_id_key", F.concat_ws("|", "season_id", "rule", F.coalesce("device_id", F.lit("")),
+                                              F.col("start_date").cast("string"))))
+    if operations is not None:
+        eps = eps.unionByName(operation_alerts(operations, season_df))
+    last_day = feat.where("weather_complete").groupBy("season_id").agg(F.max("date").alias("_last_day"))
+    return (eps.join(last_day, "season_id", "left")
+            .withColumn("alert_id", F.substring(F.sha2("_id_key", 256), 1, 16))
+            .withColumn("ongoing", (F.col("end_date") >= F.date_sub(F.current_date(), 1))
+                        & (F.col("end_date") >= F.coalesce("_last_day", F.col("end_date"))))
+            .withColumn("_updated_at", F.current_timestamp())
+            .select(*gold.ALERT_EVENT.column_names))
+
+
 def write(spark, gold_table, df):
     """Check, then replace the table's content in one commit."""
     df = df.cache()
@@ -194,6 +351,11 @@ def main(argv=None):
         write(spark, gold.FEAT_SEASON_DAILY, feat)
         write(spark, gold.AGG_SEASON_SUMMARY, build_summary(feat, season_df, weather))
         write(spark, gold.AGG_REGION_DAILY, build_region(feat, season_df))
+        operations = (spark.table(SILVER["fact_field_operation"])
+                      if table_exists(spark, SILVER["fact_field_operation"]) else None)
+        readings = (spark.table(SILVER["fact_sensor_reading"])
+                    if table_exists(spark, SILVER["fact_sensor_reading"]) else None)
+        write(spark, gold.ALERT_EVENT, build_alerts(feat, season_df, weather, operations, readings))
     finally:
         spark.stop()
 

@@ -22,7 +22,7 @@ MAX_SUBSTEP = timedelta(minutes=15)
 
 
 class SensorNode:
-    def __init__(self, farm, device_id, weather, seed=None, elevation_m=50.0):
+    def __init__(self, farm, device_id, weather, seed=None, elevation_m=50.0, irrigation_outages=()):
         self.farm = farm
         self.device_id = device_id
         self.weather = weather
@@ -37,6 +37,7 @@ class SensorNode:
         self.irrigation_end = None
         self.irrigation_rate = 0.0
         self.irrigated_on = None
+        self.irrigation_outages = tuple(irrigation_outages)  # ((first day, last day), ...): pump broken
         self._et0_cache = {}
 
         p = SESAME_FAO["water_depletion_fraction"]
@@ -86,6 +87,8 @@ class SensorNode:
         if not self.crop_present(t) or self.irrigated_on == day or not 6 <= local.hour < 7:
             return
         if self.theta >= self.theta_stress or self.weather.daily(day).precip_mm >= 5:
+            return
+        if any(first <= day <= last for first, last in self.irrigation_outages):
             return
         self.irrigated_on = day
         depth_mm = (self.soil.field_capacity - self.theta) * self.layer_mm

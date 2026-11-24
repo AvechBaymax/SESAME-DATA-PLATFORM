@@ -214,6 +214,11 @@ at once or live readings:
 # 2 % of them with injected faults; --weather nasa drives it with NASA POWER
 docker exec airflow-scheduler python -m mock_iot.producer --all-farms --mode backfill \
     --weather nasa --fault-rate 0.02
+# The same season with field incidents, so the alerts have something to catch:
+# BINHTHUAN_01 pump broken at flowering, a local storm on BINHTHUAN_02 (poor
+# drainage), BINHTHUAN_04's sensor silent for 2 days (src/mock_iot/scenarios.py)
+docker exec airflow-scheduler python -m mock_iot.producer --all-farms --mode backfill \
+    --weather nasa --fault-rate 0.02 --scenario demo
 # Live: one reading per device every 5 seconds, stamped now (Ctrl+C stops it)
 docker exec -it airflow-scheduler python -m mock_iot.producer --all-farms --mode live --interval 5
 ```
@@ -254,6 +259,10 @@ Silver into the monitoring tables (`docs/data-model.md`, section 9):
   the harvest window.
 - `lakehouse.gold.agg_region_daily`: per province and day: how many farms are
   active, water-stressed, waterlogged or heat-stressed, and their averages.
+- `lakehouse.gold.alert_event`: alerts, one per rule broken on consecutive
+  days: drought at flowering, water stress, waterlogging, heavy rain at
+  flowering or after harvest, heat, missing sensor data, low battery, and
+  fertiliser / weeding / harvest reminders, each with a Vietnamese message.
 
 Each run recomputes the tables from Silver. Run it by hand after new sensor
 data, or let the daily DAG do it:
@@ -264,7 +273,9 @@ docker exec spark-master /opt/spark/bin/spark-submit --master spark://spark-mast
 docker exec spark-master /opt/spark/bin/spark-sql --master spark://spark-master:7077 -e "
   SELECT season_id, status, round(precip_total_mm) rain, round(irrigation_total_mm) irrigation,
          round(etc_total_mm) etc, round(eta_etc_ratio, 2) eta_etc, water_stress_days, waterlog_days
-  FROM lakehouse.gold.agg_season_summary ORDER BY 1;" 2>/dev/null
+  FROM lakehouse.gold.agg_season_summary ORDER BY 1;
+  SELECT farm_id, rule, severity, start_date, days, message
+  FROM lakehouse.gold.alert_event WHERE rule <> 'operation_due' ORDER BY farm_id, start_date;" 2>/dev/null
 ```
 
 ## Sesame farm monitoring dashboard

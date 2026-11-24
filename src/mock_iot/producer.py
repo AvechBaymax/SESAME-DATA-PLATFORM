@@ -14,12 +14,15 @@ Sinks: kafka (default, key=device_id), stdout, or a .jsonl file.
 Usage (run from the repo root after `pip install -e .`):
   python -m mock_iot.producer --mode live --interval 5
   python -m mock_iot.producer --all-farms --mode backfill --weather nasa --fault-rate 0.02
+  python -m mock_iot.producer --all-farms --mode backfill --weather nasa --scenario demo
   python -m mock_iot.producer --mode backfill --planting-date 2025-11-15 \\
       --start 2025-11-10 --days 80 --sink jsonl --output data/sensor_season.jsonl
   python -m mock_iot.producer --mode backfill --start 2025-11-10 --days 80 --weather nasa
 
 --fault-rate injects malformed/out-of-range/missing/duplicate/late messages so the
-DLQ and data-quality checks have something to catch. The fault type is sent as
+DLQ and data-quality checks have something to catch. --scenario demo adds field
+incidents (pump failure, local storm, sensor outage; see scenarios.py) so the
+alerts have something to catch. The fault type is sent as
 the Kafka header "x-mock-fault" (never inside the payload).
 """
 import argparse
@@ -33,8 +36,9 @@ from datetime import date, datetime, timedelta, timezone
 from common.config import get_kafka_broker, get_sensor_topic
 from common.crop import season_length
 from common.farm import DEMO_FARMS, add_farm_args, farm_from_args
+from mock_iot import scenarios
 from mock_iot.simulator import SensorNode
-from mock_iot.weather import ClimatologyWeather, DiurnalWeather, NasaPowerWeather
+from mock_iot.weather import ClimatologyWeather, DiurnalWeather, NasaPowerWeather, StormWeather
 
 FAULT_TYPES = ("malformed", "out_of_range", "missing_field", "duplicate", "late")
 
@@ -137,12 +141,34 @@ def build_nodes(farm, args):
             print(f"NASA POWER drivers loaded for {len(daily.records)} days", file=sys.stderr)
         except Exception as exc:  # network/API issue: keep producing from climatology
             print(f"NASA POWER unavailable ({exc}); using climatology", file=sys.stderr)
+    storms = {day: i.rain_mm_per_day for i in scenarios.for_farm(args.incidents, farm.farm_id, "storm")
+              for day in _days(i)}
+    if storms:
+        daily = StormWeather(daily, storms)
+    pump = [(i.start, i.end) for i in scenarios.for_farm(args.incidents, farm.farm_id, "pump_failure")]
     weather = DiurnalWeather(daily, farm.lat, farm.lon, seed=farm.farm_id)
-    return [SensorNode(farm, device_id, weather, seed=f"{args.seed}:{device_id}")
+    return [SensorNode(farm, device_id, weather, seed=f"{args.seed}:{device_id}", irrigation_outages=pump)
             for device_id in farm.device_ids]
 
 
+def _days(incident):
+    day = incident.start
+    while day <= incident.end:
+        yield day
+        day += timedelta(days=1)
+
+
+def silent(node, message, incidents):
+    """True when a sensor_outage incident keeps this device from sending the message."""
+    local_day = (datetime.fromtimestamp(message["timestamp"], timezone.utc) + timedelta(hours=7)).date()
+    return any(i.device_id == node.device_id and i.covers(local_day)
+               for i in scenarios.for_farm(incidents, node.farm.farm_id, "sensor_outage"))
+
+
 def emit(sink, node, message, args, rng, stats):
+    if silent(node, message, args.incidents):
+        stats["silent"] = stats.get("silent", 0) + 1
+        return
     for value, fault in inject_fault(message, pick_fault(args.fault_rate, rng), rng):
         sink.send(node.device_id, value, fault)
         stats[fault or "ok"] = stats.get(fault or "ok", 0) + 1
@@ -196,6 +222,8 @@ def parse_args(argv=None):
     ap.add_argument("--weather", choices=["climatology", "nasa"], default="climatology",
                     help="daily drivers: Binh Thuan climatology or NASA POWER (past dates only)")
     ap.add_argument("--fault-rate", type=float, default=0.0, help="share of messages with injected faults")
+    ap.add_argument("--scenario", choices=sorted(scenarios.SCENARIOS), default="none",
+                    help="field incidents to simulate (demo: pump failure, storm, sensor outage)")
     ap.add_argument("--seed", default="sesame", help="random seed for reproducible runs")
     ap.add_argument("--sink", choices=["kafka", "stdout", "jsonl"], default="kafka")
     ap.add_argument("--output", help="jsonl sink: output file")
@@ -209,6 +237,7 @@ def parse_args(argv=None):
         args.days = (max(plantings) + timedelta(days=season_length() + 5) - args.start).days
     if not 0 <= args.fault_rate <= 1:
         ap.error("--fault-rate must be between 0 and 1")
+    args.incidents = scenarios.SCENARIOS[args.scenario]()
     args.broker = get_kafka_broker(args.broker)
     args.topic = get_sensor_topic(args.topic)
     return args
@@ -220,6 +249,9 @@ def main(argv=None):
     rng = random.Random(f"{args.seed}:faults")
     nodes = [node for farm in farms for node in build_nodes(farm, args)]
     print(f"Simulating {len(nodes)} device(s) on {len(farms)} farm(s)", file=sys.stderr)
+    for incident in args.incidents:
+        print(f"Incident {incident.kind} on {incident.farm_id} {incident.start} -> {incident.end}: "
+              f"{incident.note}", file=sys.stderr)
     sink = make_sink(args)
     try:
         if args.mode == "backfill":
